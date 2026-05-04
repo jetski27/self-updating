@@ -27,8 +27,11 @@ BASE_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/"
 
 echo "==> Building MyApp ${VERSION}"
 
-echo "==> mvn clean package"
-mvn -B -q clean package -Dquarkus.package.jar.type=fast-jar -DskipTests
+echo "==> mvn clean package (revision=${VERSION})"
+mvn -B -q clean package \
+    -Drevision="${VERSION}" \
+    -Dquarkus.package.jar.type=fast-jar \
+    -DskipTests
 
 echo "==> Assembling dist/"
 rm -rf dist

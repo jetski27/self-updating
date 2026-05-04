@@ -8,7 +8,7 @@
     <parent>
         <groupId>com.example.myapp</groupId>
         <artifactId>myapp-parent</artifactId>
-        <version>1.0.0</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>app</artifactId>
