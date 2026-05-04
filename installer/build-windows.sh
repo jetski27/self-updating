@@ -18,7 +18,18 @@ VERSION="${VERSION:-1.0.0}"
 JAVA_HOME_DIR="${JAVA_HOME:?JAVA_HOME is required}"
 
 echo "==> Step 1: wrap launcher.jar -> MyApp.exe (Launch4j)"
-launch4j launcher/launch4j-config.xml
+# Launch4j on Windows ships a batch wrapper that cd's into its own install dir
+# before invoking the JAR, so a relative config path won't resolve. Pass an
+# absolute, OS-native path. Prefer the console binary (launch4jc) when present.
+CONFIG_PATH="$ROOT/launcher/launch4j-config.xml"
+if command -v cygpath >/dev/null 2>&1; then
+  CONFIG_PATH="$(cygpath -w "$CONFIG_PATH")"
+fi
+if command -v launch4jc >/dev/null 2>&1; then
+  launch4jc "$CONFIG_PATH"
+else
+  launch4j "$CONFIG_PATH"
+fi
 
 if [[ ! -f installer/MyApp.exe ]]; then
   echo "Launch4j did not produce installer/MyApp.exe" >&2
