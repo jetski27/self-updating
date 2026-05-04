@@ -64,6 +64,7 @@ def main() -> int:
 
     files: list[tuple[Path, int, str, bool]] = []
     total_bytes = 0
+    seen_basenames: dict[str, str] = {}
 
     for f in sorted(dist.rglob("*")):
         if not f.is_file():
@@ -77,6 +78,18 @@ def main() -> int:
         # of the manifest; the installer ships it once and leaves it alone.
         if rel == "launcher.jar":
             continue
+        # GitHub release assets are flat (no folders), so download URLs
+        # use the basename only. Bail out loudly if two source files would
+        # collide on the release page.
+        basename = Path(rel).name
+        if basename in seen_basenames:
+            print(
+                f"error: duplicate basename {basename!r}: "
+                f"{seen_basenames[basename]} vs {rel}",
+                file=sys.stderr,
+            )
+            return 1
+        seen_basenames[basename] = rel
         size = f.stat().st_size
         digest = adler32_of(f)
         on_classpath = any(rel.startswith(pfx) for pfx in CLASSPATH_PREFIXES)
@@ -100,11 +113,14 @@ def main() -> int:
     ]
     for rel, size, digest, on_cp in files:
         rel_posix = rel.as_posix()
+        basename = rel.name
         attrs = [
             f"path={quoteattr(rel_posix)}",
             f'size="{size}"',
             f'checksum="{digest}"',
-            f"uri={quoteattr(base + rel_posix)}",
+            # path is the local layout update4j writes to; uri is where the
+            # bytes live on GitHub Releases (flat namespace, basename only).
+            f"uri={quoteattr(base + basename)}",
         ]
         if on_cp:
             attrs.append('classpath="true"')
