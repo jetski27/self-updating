@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# Build the Windows installer (.exe) using jpackage, with launcher.jar wrapped
-# as MyApp.exe via Launch4j.
+# Build the Windows installer (.exe) using jpackage.
 #
-# Why two-step: jpackage's --main-jar would make quarkus-run.jar the entry point.
-# We want our update4j Launcher to run first instead — it checks for updates,
-# then loads Quarkus through update4j's dynamic classpath. So we wrap launcher.jar
-# into MyApp.exe (Launch4j) and use --add-launcher to make jpackage register the
-# wrapped EXE as the application's primary launcher.
+# launcher.jar is the entry point: jpackage's MyApp.exe boots launcher.jar,
+# which checks for updates via update4j and then loads the Quarkus fast-jar
+# from the dynamic classpath. quarkus-run.jar + lib/ + app/ are still copied
+# into the install dir as the seed payload, so first launch can work offline
+# (the launcher's local-fallback path).
 #
 set -euo pipefail
 
@@ -17,46 +16,25 @@ cd "$ROOT"
 VERSION="${VERSION:-1.0.0}"
 JAVA_HOME_DIR="${JAVA_HOME:?JAVA_HOME is required}"
 
-echo "==> Step 1: wrap launcher.jar -> MyApp.exe (Launch4j)"
-# Launch4j on Windows ships a batch wrapper that cd's into its own install dir
-# before invoking the JAR, so a relative config path won't resolve. Pass an
-# absolute, OS-native path. Prefer the console binary (launch4jc) when present.
-CONFIG_PATH="$ROOT/launcher/launch4j-config.xml"
-if command -v cygpath >/dev/null 2>&1; then
-  CONFIG_PATH="$(cygpath -w "$CONFIG_PATH")"
-fi
-if command -v launch4jc >/dev/null 2>&1; then
-  launch4jc "$CONFIG_PATH"
-else
-  launch4j "$CONFIG_PATH"
-fi
-
-if [[ ! -f installer/MyApp.exe ]]; then
-  echo "Launch4j did not produce installer/MyApp.exe" >&2
-  exit 1
-fi
-
 mkdir -p installer/output
 
-# We use the wrapped MyApp.exe as the primary launcher. quarkus-run.jar is still
-# in --input dist/ so it ships, but it's not the entry point at runtime — the
-# launcher loads it dynamically via update4j.
-echo "==> Step 2: jpackage"
 jpackage \
   --type exe \
   --name "MyApp" \
   --app-version "${VERSION}" \
+  --vendor "MyApp" \
+  --description "MyApp self-updating desktop application" \
   --input dist/ \
-  --main-jar quarkus-run.jar \
-  --main-class io.quarkus.bootstrap.runner.QuarkusEntryPoint \
-  --java-options "-Dapp.home=%APPDATA%/MyApp" \
+  --main-jar launcher.jar \
+  --main-class com.example.myapp.launcher.Launcher \
+  --java-options "-Dgithub.owner=jetski27" \
+  --java-options "-Dgithub.repo=self-updating" \
   --win-dir-chooser \
   --win-menu \
   --win-menu-group "MyApp" \
   --win-shortcut \
   --icon installer/app.ico \
   --runtime-image "${JAVA_HOME_DIR}" \
-  --add-launcher MyAppLauncher=installer/launcher.properties \
   --dest installer/output/
 
 echo "==> Done. Installers at installer/output/"

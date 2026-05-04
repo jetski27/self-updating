@@ -52,14 +52,6 @@ jobs:
         shell: bash
         run: scripts/build-release.sh "${{ steps.ver.outputs.version }}"
 
-      - name: Install Launch4j
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -L -o launch4j.zip "https://download.sourceforge.net/project/launch4j/launch4j-3/3.50/launch4j-3.50-win32.zip"
-          7z x launch4j.zip -o"$RUNNER_TEMP/launch4j" >/dev/null
-          echo "$RUNNER_TEMP/launch4j/launch4j" >> "$GITHUB_PATH"
-
       - name: Build Windows installer
         shell: bash
         env:

@@ -121,6 +121,11 @@ public final class Launcher {
         if (prop != null && !prop.isBlank()) {
             return Path.of(prop);
         }
+        // Windows: use %APPDATA%\MyApp so we don't need a -Dapp.home jvm option.
+        String appdata = System.getenv("APPDATA");
+        if (appdata != null && !appdata.isBlank()) {
+            return Path.of(appdata, "MyApp");
+        }
         return Path.of(System.getProperty("user.home"), ".myapp");
     }
 

@@ -5,7 +5,7 @@ Production-ready, self-updating desktop application.
 - **Backend**: Quarkus 3.15 (JVM, fast-jar)
 - **Frontend**: Vite + React + TypeScript, embedded via Quarkus Quinoa
 - **Auto-update**: [update4j](https://github.com/update4j/update4j) — fetches `config.xml` from GitHub Releases, compares SHA-256 hashes, downloads only what changed
-- **Windows installer**: `jpackage` (bundled JRE) + Launch4j to wrap the launcher into `MyApp.exe`
+- **Windows installer**: `jpackage` (bundled JRE) — `MyApp.exe` runs `launcher.jar` directly, no Launch4j wrapper
 
 ## Repository layout
 
@@ -16,7 +16,7 @@ Production-ready, self-updating desktop application.
 ├── app/                        Quarkus + Quinoa application
 │   ├── frontend/               Vite + React source
 │   └── src/main/java/...       REST resources, scheduler, event bus
-├── installer/                  jpackage + Launch4j configuration
+├── installer/                  jpackage configuration
 ├── scripts/                    build-release.sh, verify-release.sh, generate-config.py
 └── .github/workflows/          release.yml — GitHub Actions release pipeline
 ```
@@ -59,7 +59,7 @@ Open <http://localhost:8080>.
 
 ## How auto-update works
 
-1. User runs `MyApp.exe` (Launch4j-wrapped launcher.jar with bundled JRE).
+1. User runs `MyApp.exe` (jpackage native launcher → `launcher.jar` on the bundled JRE).
 2. Launcher hits `https://api.github.com/repos/jetski27/self-updating/releases/latest`,
    downloads `config.xml`, runs update4j which sha-256-compares each file and
    downloads only what changed.

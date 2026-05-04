@@ -14,7 +14,6 @@ app/.quinoa/
 ### Release output ###
 /dist/
 installer/output/
-installer/MyApp.exe
 
 ### IntelliJ IDEA ###
 .idea/
