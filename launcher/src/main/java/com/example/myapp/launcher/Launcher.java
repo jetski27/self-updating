@@ -3,24 +3,24 @@ package com.example.myapp.launcher;
 /*
  * Launcher lifecycle
  * ------------------
- * 1. Resolve APP_HOME from -Dapp.home (default ${user.home}/.myapp).
- * 2. Resolve ${APP_HOME}/config.xml — the locally cached update4j config from the
- *    last successful update. On a fresh install jpackage has placed the initial
- *    config.xml at this location for us.
- * 3. Try to discover the latest GitHub release via the public GitHub API
- *    (https://api.github.com/repos/{owner}/{repo}/releases/latest), build the URL
- *    https://github.com/{owner}/{repo}/releases/download/{tag}/config.xml, and read
- *    that remote update4j config.
- * 4. Run config.update(...) which compares SHA-256 of every file and downloads
+ * 1. Resolve APP_HOME (system prop -Dapp.home > %APPDATA%\MyApp on Windows >
+ *    ${user.home}/.myapp). Set it as a system property so update4j's
+ *    ${app.home} placeholder in config.xml resolves to it.
+ * 2. Configure file logging at ${APP_HOME}/logs/launcher.log so jpackage's
+ *    windowless MyApp.exe still leaves a forensic trail.
+ * 3. First-run seeding: if ${APP_HOME} is empty, copy the bundled payload
+ *    that the installer dropped at ${install_dir}/app/ over to ${APP_HOME}.
+ *    This lets the app boot offline on first run.
+ * 4. Try to discover the latest GitHub release and read the remote config.xml.
+ * 5. Run config.update(...) which sha-256-compares each file and downloads
  *    only what changed. Logs each file + size as it streams.
- * 5. On success, write the new remote config.xml to ${APP_HOME}/config.xml so
- *    next launch starts from the latest known-good state. On any network/parse
- *    failure we log a warning and fall through to launch with the cached config.
- * 6. Call config.launch() which is BLOCKING — it loads the dynamic classpath
- *    and runs Quarkus in-process.
- * 7. When the launched app exits, check ${APP_HOME}/.restart-pending. If present
- *    we delete the marker and loop back to step 3 (re-checking for updates and
- *    relaunching). If absent we exit normally.
+ * 6. On success, persist the new config.xml to ${APP_HOME}/config.xml. On any
+ *    network/parse failure we log a warning and fall through to launch with
+ *    the cached config.
+ * 7. config.launch() loads the dynamic classpath and runs Quarkus
+ *    (entry point declared in config.xml's default.launcher.main.class).
+ *    Blocking — returns when Quarkus exits.
+ * 8. If ${APP_HOME}/.restart-pending exists, delete it and loop back to 4.
  */
 
 import org.update4j.Configuration;
@@ -32,12 +32,17 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
+import java.util.logging.FileHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -55,21 +60,37 @@ public final class Launcher {
     }
 
     public static void main(String[] args) {
+        Path appHome = resolveAppHome();
+        try {
+            Files.createDirectories(appHome);
+        } catch (IOException e) {
+            System.err.println("[launcher] cannot create " + appHome + ": " + e.getMessage());
+            System.exit(1);
+        }
+        // Make ${app.home} resolvable inside update4j config.xml.
+        System.setProperty("app.home", appHome.toString());
+        configureFileLogging(appHome);
+
+        LOG.info("[launcher] APP_HOME=" + appHome);
+
         try {
             do {
-                runOnce();
-            } while (consumeRestartFlag());
+                runOnce(appHome);
+            } while (consumeRestartFlag(appHome));
         } catch (Throwable t) {
+            LOG.log(Level.SEVERE, "[launcher] FATAL", t);
             System.err.println("[launcher] FATAL: " + t.getMessage());
             t.printStackTrace(System.err);
             System.exit(1);
         }
     }
 
-    private static void runOnce() throws Exception {
-        Path appHome = resolveAppHome();
-        Files.createDirectories(appHome);
+    private static void runOnce(Path appHome) throws Exception {
         Path localConfig = appHome.resolve("config.xml");
+
+        if (!Files.exists(localConfig)) {
+            seedFromInstallDir(appHome);
+        }
 
         String owner = System.getProperty("github.owner", DEFAULT_OWNER);
         String repo = System.getProperty("github.repo", DEFAULT_REPO);
@@ -90,7 +111,6 @@ public final class Launcher {
             boolean updated = config.update(new LoggingUpdateHandler());
             LOG.info("[launcher] Update finished. Files changed: " + updated);
 
-            // Cache the new config locally so subsequent offline launches still work.
             try (InputStream in = openStream(remoteConfigUri)) {
                 Files.copy(in, localConfig, StandardCopyOption.REPLACE_EXISTING);
             }
@@ -121,7 +141,6 @@ public final class Launcher {
         if (prop != null && !prop.isBlank()) {
             return Path.of(prop);
         }
-        // Windows: use %APPDATA%\MyApp so we don't need a -Dapp.home jvm option.
         String appdata = System.getenv("APPDATA");
         if (appdata != null && !appdata.isBlank()) {
             return Path.of(appdata, "MyApp");
@@ -129,14 +148,93 @@ public final class Launcher {
         return Path.of(System.getProperty("user.home"), ".myapp");
     }
 
-    private static boolean consumeRestartFlag() throws IOException {
-        Path marker = resolveAppHome().resolve(".restart-pending");
+    /**
+     * Locate the read-only payload jpackage shipped alongside the EXE.
+     * jpackage layout: ${install}/runtime/ for the JRE, ${install}/app/ for
+     * the contents of --input. So java.home's parent + /app is our seed.
+     */
+    private static Path findSeedDir() {
+        String jpackagePath = System.getProperty("jpackage.app-path");
+        if (jpackagePath != null && !jpackagePath.isBlank()) {
+            Path candidate = Path.of(jpackagePath).toAbsolutePath().getParent();
+            if (candidate != null) {
+                Path appDir = candidate.resolve("app");
+                if (Files.isDirectory(appDir) && Files.exists(appDir.resolve("config.xml"))) {
+                    return appDir;
+                }
+            }
+        }
+        String javaHome = System.getProperty("java.home");
+        if (javaHome != null) {
+            Path parent = Path.of(javaHome).getParent();
+            if (parent != null) {
+                Path appDir = parent.resolve("app");
+                if (Files.isDirectory(appDir) && Files.exists(appDir.resolve("config.xml"))) {
+                    return appDir;
+                }
+            }
+        }
+        Path cwd = Path.of("").toAbsolutePath();
+        if (Files.exists(cwd.resolve("config.xml")) && Files.exists(cwd.resolve("quarkus-run.jar"))) {
+            return cwd;
+        }
+        return null;
+    }
+
+    private static void seedFromInstallDir(Path appHome) throws IOException {
+        Path seed = findSeedDir();
+        if (seed == null) {
+            LOG.info("[launcher] No seed directory found — first launch will need network.");
+            return;
+        }
+        LOG.info("[launcher] Seeding " + appHome + " from " + seed);
+        Files.walkFileTree(seed, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                Path rel = seed.relativize(dir);
+                Path target = appHome.resolve(rel.toString());
+                Files.createDirectories(target);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Path rel = seed.relativize(file);
+                String relStr = rel.toString().replace('\\', '/');
+                // Skip launcher.jar — currently running, can't be overwritten.
+                if (relStr.equals("launcher.jar")) {
+                    return FileVisitResult.CONTINUE;
+                }
+                Path target = appHome.resolve(rel.toString());
+                Files.copy(file, target, StandardCopyOption.REPLACE_EXISTING);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private static boolean consumeRestartFlag(Path appHome) throws IOException {
+        Path marker = appHome.resolve(".restart-pending");
         if (Files.exists(marker)) {
             Files.deleteIfExists(marker);
             LOG.info("[launcher] Restart pending — relaunching.");
             return true;
         }
         return false;
+    }
+
+    private static void configureFileLogging(Path appHome) {
+        try {
+            Path logDir = appHome.resolve("logs");
+            Files.createDirectories(logDir);
+            FileHandler fh = new FileHandler(logDir.resolve("launcher.log").toString(), 1_048_576, 3, true);
+            fh.setFormatter(new SimpleFormatter());
+            fh.setLevel(Level.ALL);
+            Logger root = Logger.getLogger("");
+            root.addHandler(fh);
+            root.setLevel(Level.INFO);
+        } catch (IOException e) {
+            System.err.println("[launcher] Could not initialise file logging: " + e.getMessage());
+        }
     }
 
     private static String fetchLatestTag(String owner, String repo) throws IOException, InterruptedException {

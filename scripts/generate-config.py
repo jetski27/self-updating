@@ -60,6 +60,11 @@ def main() -> int:
         # Don't ship the config itself as a payload entry.
         if rel == "config.xml":
             continue
+        # launcher.jar is the bootstrap binary that owns update4j itself —
+        # it can't update itself in-place while it's running. Keep it out
+        # of the manifest; the installer ships it once and leaves it alone.
+        if rel == "launcher.jar":
+            continue
         size = f.stat().st_size
         digest = sha256_of(f)
         on_classpath = any(rel.startswith(pfx) for pfx in CLASSPATH_PREFIXES)
@@ -72,9 +77,16 @@ def main() -> int:
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
         "<configuration>",
         f"    <timestamp>{timestamp}</timestamp>",
-        f"    <base uri={quoteattr(base)}/>",
+        # path="${app.home}" tells update4j to read/write files under the
+        # writable per-user dir the launcher resolves at runtime, instead
+        # of CWD (which on a jpackage install points at C:\Program Files\…).
+        f'    <base uri={quoteattr(base)} path="${{app.home}}"/>',
         f"    <properties>",
         f'        <property key="app.version" value={quoteattr(args.version)}/>',
+        # Tells update4j's DefaultLauncher which class to run after the
+        # dynamic classpath is built. Without this, config.launch() is a no-op.
+        f'        <property key="default.launcher.main.class"'
+        f' value="io.quarkus.bootstrap.runner.QuarkusEntryPoint"/>',
         f"    </properties>",
         "    <files>",
     ]
