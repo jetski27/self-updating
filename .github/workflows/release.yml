@@ -1,0 +1,83 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2-
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: app/frontend/node_modules
+          key: ${{ runner.os }}-npm-${{ hashFiles('app/frontend/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
+
+      - name: Extract version from tag
+        id: ver
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build release distribution
+        shell: bash
+        run: scripts/build-release.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Install Launch4j
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L -o launch4j.zip "https://download.sourceforge.net/project/launch4j/launch4j-3/3.50/launch4j-3.50-win32.zip"
+          7z x launch4j.zip -o"$RUNNER_TEMP/launch4j" >/dev/null
+          echo "$RUNNER_TEMP/launch4j/launch4j" >> "$GITHUB_PATH"
+
+      - name: Build Windows installer
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: installer/build-windows.sh
+
+      - name: Verify release
+        shell: bash
+        run: scripts/verify-release.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/config.xml
+            dist/quarkus-run.jar
+            dist/launcher.jar
+            dist/app/**/*
+            dist/lib/**/*
+            installer/output/MyApp-*.exe
