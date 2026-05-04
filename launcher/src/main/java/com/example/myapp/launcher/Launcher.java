@@ -17,8 +17,10 @@ package com.example.myapp.launcher;
  * 6. On success, persist the new config.xml to ${APP_HOME}/config.xml. On any
  *    network/parse failure we log a warning and fall through to launch with
  *    the cached config.
- * 7. config.launch() loads the dynamic classpath and runs Quarkus
- *    (entry point declared in config.xml's default.launcher.main.class).
+ * 7. Spawn a child JVM with `java -jar ${APP_HOME}/quarkus-run.jar`. Quarkus
+ *    fast-jar relies on its own classloader hierarchy and assumes it's the
+ *    process entry point — running it via update4j's reflective Class.forName
+ *    breaks the bootstrap. Child stdout/stderr go to ${APP_HOME}/logs/quarkus.log.
  *    Blocking — returns when Quarkus exits.
  * 8. If ${APP_HOME}/.restart-pending exists, delete it and loop back to 4.
  */
@@ -132,8 +134,51 @@ public final class Launcher {
         }
 
         LOG.info("[launcher] Launching application...");
-        config.launch();
-        LOG.info("[launcher] Application exited.");
+        // Silence unused warning; we may log details later.
+        if (config == null) throw new IllegalStateException("no configuration");
+        int exit = launchQuarkus(appHome);
+        LOG.info("[launcher] Application exited with code " + exit);
+    }
+
+    private static int launchQuarkus(Path appHome) throws IOException, InterruptedException {
+        Path javaBin = Path.of(
+            System.getProperty("java.home"),
+            "bin",
+            isWindows() ? "java.exe" : "java"
+        );
+        Path quarkusJar = appHome.resolve("quarkus-run.jar");
+        if (!Files.isRegularFile(quarkusJar)) {
+            throw new IllegalStateException("quarkus-run.jar not found at " + quarkusJar);
+        }
+        Path logDir = appHome.resolve("logs");
+        Files.createDirectories(logDir);
+
+        ProcessBuilder pb = new ProcessBuilder(
+            javaBin.toString(),
+            "-Dapp.home=" + appHome,
+            "-jar", quarkusJar.toString()
+        );
+        pb.directory(appHome.toFile());
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(logDir.resolve("quarkus.log").toFile());
+
+        LOG.info("[launcher] Starting Quarkus: " + pb.command());
+        Process proc = pb.start();
+        Thread hook = new Thread(() -> {
+            if (proc.isAlive()) {
+                proc.destroy();
+            }
+        }, "myapp-launcher-shutdown");
+        Runtime.getRuntime().addShutdownHook(hook);
+        try {
+            return proc.waitFor();
+        } finally {
+            try { Runtime.getRuntime().removeShutdownHook(hook); } catch (IllegalStateException ignored) { /* JVM already shutting down */ }
+        }
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("windows");
     }
 
     private static Path resolveAppHome() {

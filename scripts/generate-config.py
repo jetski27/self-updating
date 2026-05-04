@@ -18,11 +18,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import sys
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 CLASSPATH_PREFIXES = ("app/", "lib/")
+
+
+def adler32_of(path: Path) -> str:
+    """update4j stores file checksums as a 64-bit unsigned Long parsed as
+    radix-16 hex. By default it uses java.util.zip.Adler32; matching that
+    here so update4j's Configuration.read() can parse the manifest."""
+    a = 1
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            a = zlib.adler32(chunk, a)
+    return f"{a & 0xFFFFFFFF:x}"
 
 
 def sha256_of(path: Path) -> str:
@@ -66,7 +78,7 @@ def main() -> int:
         if rel == "launcher.jar":
             continue
         size = f.stat().st_size
-        digest = sha256_of(f)
+        digest = adler32_of(f)
         on_classpath = any(rel.startswith(pfx) for pfx in CLASSPATH_PREFIXES)
         files.append((Path(rel), size, digest, on_classpath))
         total_bytes += size
@@ -83,10 +95,6 @@ def main() -> int:
         f'    <base uri={quoteattr(base)} path="${{app.home}}"/>',
         f"    <properties>",
         f'        <property key="app.version" value={quoteattr(args.version)}/>',
-        # Tells update4j's DefaultLauncher which class to run after the
-        # dynamic classpath is built. Without this, config.launch() is a no-op.
-        f'        <property key="default.launcher.main.class"'
-        f' value="io.quarkus.bootstrap.runner.QuarkusEntryPoint"/>',
         f"    </properties>",
         "    <files>",
     ]

@@ -23,9 +23,9 @@ echo "==> XML well-formedness"
 python3 -c "import sys, xml.etree.ElementTree as ET; ET.parse(sys.argv[1])" "$DIST/config.xml" \
   || fail "config.xml is not valid XML"
 
-echo "==> sha256 cross-check of every <file>"
+echo "==> Adler-32 cross-check of every <file> (must match update4j's expected format)"
 python3 - "$DIST" <<'PY'
-import hashlib, os, sys
+import os, sys, zlib
 import xml.etree.ElementTree as ET
 
 dist = sys.argv[1]
@@ -47,14 +47,14 @@ for f in root.iter("file"):
         print(f"  missing file declared in config.xml: {rel}", file=sys.stderr)
         errors += 1
         continue
-    h = hashlib.sha256()
+    a = 1
     with open(p, "rb") as fp:
         for chunk in iter(lambda: fp.read(1024 * 1024), b""):
-            h.update(chunk)
-    actual = h.hexdigest()
+            a = zlib.adler32(chunk, a)
+    actual = f"{a & 0xFFFFFFFF:x}"
     actual_size = os.path.getsize(p)
     if actual != expected:
-        print(f"  sha mismatch on {rel}: expected {expected}, got {actual}", file=sys.stderr)
+        print(f"  adler-32 mismatch on {rel}: expected {expected}, got {actual}", file=sys.stderr)
         errors += 1
     if expected_size != -1 and actual_size != expected_size:
         print(f"  size mismatch on {rel}: expected {expected_size}, got {actual_size}", file=sys.stderr)
