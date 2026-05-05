@@ -28,6 +28,7 @@ package com.example.myapp.launcher;
 import org.update4j.Configuration;
 import org.update4j.service.UpdateHandler;
 
+import java.awt.Desktop;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -206,25 +207,49 @@ public final class Launcher {
         Runtime.getRuntime().addShutdownHook(hook);
 
         // Wait for Quarkus to be reachable on 8080 (or for it to die early), then
-        // hide the splash. The launcher process keeps the EDT alive until main()
-        // returns, so dispose() comes from the finally in main().
-        if (splash != null) {
-            Thread waiter = new Thread(() -> {
-                if (waitForPortOrExit(proc, 8080, 60_000)) {
+        // open the user's browser at http://localhost:8080 and fade the splash
+        // out. The launcher process keeps the EDT alive until main() returns,
+        // so dispose() comes from the finally in main().
+        Thread waiter = new Thread(() -> {
+            if (waitForPortOrExit(proc, 8080, 60_000)) {
+                if (splash != null) {
                     splash.setStatus("MyApp is ready");
-                    splash.setDetail("Open http://localhost:8080");
-                    try { Thread.sleep(800); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    splash.setDetail("Opening browser…");
                 }
-                splash.hide();
-            }, "myapp-splash-waiter");
-            waiter.setDaemon(true);
-            waiter.start();
-        }
+                openBrowser("http://localhost:8080");
+                try { Thread.sleep(900); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            }
+            if (splash != null) splash.hide();
+        }, "myapp-splash-waiter");
+        waiter.setDaemon(true);
+        waiter.start();
 
         try {
             return proc.waitFor();
         } finally {
             try { Runtime.getRuntime().removeShutdownHook(hook); } catch (IllegalStateException ignored) { /* JVM already shutting down */ }
+        }
+    }
+
+    private static void openBrowser(String url) {
+        try {
+            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                Desktop.getDesktop().browse(URI.create(url));
+                return;
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "[launcher] Desktop.browse failed, falling back to OS shell", e);
+        }
+        try {
+            if (isWindows()) {
+                new ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", url).start();
+            } else {
+                String os = System.getProperty("os.name", "").toLowerCase();
+                if (os.contains("mac")) new ProcessBuilder("open", url).start();
+                else new ProcessBuilder("xdg-open", url).start();
+            }
+        } catch (Exception e) {
+            LOG.log(Level.WARNING, "[launcher] Could not open browser: " + e.getMessage(), e);
         }
     }
 

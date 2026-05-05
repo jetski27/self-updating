@@ -21,6 +21,12 @@
             <artifactId>update4j</artifactId>
             <version>${update4j.version}</version>
         </dependency>
+        <!-- Modern L&F for the splash window (~1 MB, JetBrains-style theme). -->
+        <dependency>
+            <groupId>com.formdev</groupId>
+            <artifactId>flatlaf</artifactId>
+            <version>3.5.4</version>
+        </dependency>
     </dependencies>
 
     <build>
