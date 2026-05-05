@@ -74,4 +74,4 @@ jobs:
             dist/app/**
             dist/lib/**
             dist/quarkus/**
-            installer/output/MyApp-*.exe
+            installer/output/PoS Agent-*.exe

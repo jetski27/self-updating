@@ -25,7 +25,7 @@ OWNER="${GITHUB_OWNER:-jetski27}"
 REPO="${GITHUB_REPO:-self-updating}"
 BASE_URL="https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/"
 
-echo "==> Building MyApp ${VERSION}"
+echo "==> Building PoS Agent ${VERSION}"
 
 echo "==> mvn clean package (revision=${VERSION})"
 mvn -B -q clean package \

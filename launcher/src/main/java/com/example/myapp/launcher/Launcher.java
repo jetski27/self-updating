@@ -3,11 +3,11 @@ package com.example.myapp.launcher;
 /*
  * Launcher lifecycle
  * ------------------
- * 1. Resolve APP_HOME (system prop -Dapp.home > %APPDATA%\MyApp on Windows >
- *    ${user.home}/.myapp). Set it as a system property so update4j's
+ * 1. Resolve APP_HOME (system prop -Dapp.home > %APPDATA%\PoS Agent on Windows >
+ *    ${user.home}/.posagent). Set it as a system property so update4j's
  *    ${app.home} placeholder in config.xml resolves to it.
  * 2. Configure file logging at ${APP_HOME}/logs/launcher.log so jpackage's
- *    windowless MyApp.exe still leaves a forensic trail.
+ *    windowless PoS Agent.exe still leaves a forensic trail.
  * 3. First-run seeding: if ${APP_HOME} is empty, copy the bundled payload
  *    that the installer dropped at ${install_dir}/app/ over to ${APP_HOME}.
  *    This lets the app boot offline on first run.
@@ -78,7 +78,7 @@ public final class Launcher {
 
         LauncherSplash splash = LauncherSplash.createOrNull();
         if (splash != null) {
-            splash.setStatus("Starting MyApp…");
+            splash.setStatus("Starting PoS Agent…");
             splash.setIndeterminate();
             splash.show();
         }
@@ -167,7 +167,7 @@ public final class Launcher {
         // Silence unused warning; we may log details later.
         if (config == null) throw new IllegalStateException("no configuration");
         if (splash != null) {
-            splash.setStatus("Launching MyApp…");
+            splash.setStatus("Launching PoS Agent…");
             splash.setDetail("Open http://localhost:8080 once it's ready");
             splash.setIndeterminate();
         }
@@ -213,7 +213,7 @@ public final class Launcher {
         Thread waiter = new Thread(() -> {
             if (waitForPortOrExit(proc, 8080, 60_000)) {
                 if (splash != null) {
-                    splash.setStatus("MyApp is ready");
+                    splash.setStatus("PoS Agent is ready");
                     splash.setDetail("Opening browser…");
                 }
                 openBrowser("http://localhost:8080");
@@ -278,9 +278,9 @@ public final class Launcher {
         }
         String appdata = System.getenv("APPDATA");
         if (appdata != null && !appdata.isBlank()) {
-            return Path.of(appdata, "MyApp");
+            return Path.of(appdata, "PoS Agent");
         }
-        return Path.of(System.getProperty("user.home"), ".myapp");
+        return Path.of(System.getProperty("user.home"), ".posagent");
     }
 
     /**

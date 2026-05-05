@@ -9,7 +9,7 @@
     <artifactId>myapp-parent</artifactId>
     <version>${revision}</version>
     <packaging>pom</packaging>
-    <name>MyApp Parent</name>
+    <name>PoS Agent Parent</name>
 
     <modules>
         <module>launcher</module>

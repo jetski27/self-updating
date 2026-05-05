@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>launcher</artifactId>
-    <name>MyApp Launcher</name>
+    <name>PoS Agent Launcher</name>
     <description>update4j bootstrap. Stays small and almost never changes.</description>
 
     <dependencies>

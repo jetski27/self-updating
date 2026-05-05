@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>app</artifactId>
-    <name>MyApp Quarkus Application</name>
+    <name>PoS Agent Quarkus Application</name>
 
     <dependencies>
         <dependency>

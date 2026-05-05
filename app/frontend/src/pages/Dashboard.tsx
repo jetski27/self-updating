@@ -68,13 +68,11 @@ export default function Dashboard() {
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div className="row">
-            <h1 style={{ margin: 0 }}>MyApp</h1>
+            <h1 style={{ margin: 0 }}>PoS Agent</h1>
             <span className="badge">v{info?.version ?? '…'}</span>
           </div>
           <span className={CHIP_CLASS[status]}>{CHIP_LABEL[status]}</span>
         </div>
-
-        <p style={{ marginTop: '0.75rem', color: 'var(--muted)' }}>Hi, this is update #2 — applied via Settings</p>
 
         {status === 'DOWNLOADING' && (
           <div style={{ marginTop: '0.75rem' }}>

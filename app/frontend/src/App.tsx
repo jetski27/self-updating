@@ -6,7 +6,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="brand">MyApp</div>
+        <div className="brand">PoS Agent</div>
         <nav>
           <Link to="/">Dashboard</Link>
           <Link to="/settings">Settings</Link>

@@ -17,6 +17,6 @@ public class HelloResource {
     @GET
     @Produces(MediaType.APPLICATION_JSON)
     public HelloResponse hello() {
-        return new HelloResponse("Hello from MyApp", version);
+        return new HelloResponse("Hello from PoS Agent", version);
     }
 }
