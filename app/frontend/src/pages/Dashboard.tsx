@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useUpdateEvents, type UpdateStatus } from '../hooks/useUpdateEvents';
+import AnimatedHero from '../components/AnimatedHero';
 
 interface AppInfo {
   version: string;
@@ -56,7 +57,14 @@ export default function Dashboard() {
 
   return (
     <>
-      <h1>review time!</h1>
+      <section className="hero">
+        <AnimatedHero />
+        <div className="hero-overlay">
+          <h1 className="hero-title">PoS Agent</h1>
+          <p className="hero-tagline">Self-updating · by Azry</p>
+        </div>
+      </section>
+
       {status === 'RESTART_PENDING' && (
         <div className="banner">
           <span>Version {pendingVersion} is ready. Restart now to apply.</span>
