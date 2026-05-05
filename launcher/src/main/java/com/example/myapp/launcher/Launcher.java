@@ -84,9 +84,7 @@ public final class Launcher {
         }
 
         try {
-            do {
-                runOnce(appHome, splash);
-            } while (consumeRestartFlag(appHome));
+            superviseAndRun(appHome, splash);
         } catch (Throwable t) {
             LOG.log(Level.SEVERE, "[launcher] FATAL", t);
             System.err.println("[launcher] FATAL: " + t.getMessage());
@@ -102,7 +100,59 @@ public final class Launcher {
         }
     }
 
-    private static void runOnce(Path appHome, LauncherSplash splash) throws Exception {
+    /**
+     * Supervisor loop. Three exit reasons for the child Quarkus process:
+     *   1. Clean exit (code 0, no restart marker)  → quit launcher.
+     *   2. User-requested restart (marker present) → loop immediately, no backoff.
+     *   3. Crash (nonzero exit, no marker)         → exponential backoff and retry.
+     *
+     * Backoff resets when the app stays up longer than {@link #UPTIME_RESET_MS},
+     * so a flaky once-an-hour crash never lets the delay grow without bound.
+     * Cap is 60 s so kiosks recover quickly even after sustained failures.
+     */
+    private static void superviseAndRun(Path appHome, LauncherSplash splash) throws Exception {
+        long[] backoffs = {1_000L, 2_000L, 5_000L, 10_000L, 30_000L, 60_000L};
+        int crashStreak = 0;
+
+        while (true) {
+            long startedAt = System.currentTimeMillis();
+            int exit = runOnce(appHome, splash);
+            long uptimeMs = System.currentTimeMillis() - startedAt;
+
+            if (consumeRestartFlag(appHome)) {
+                crashStreak = 0;
+                continue;
+            }
+            if (exit == 0) {
+                LOG.info("[launcher] Clean exit, no restart pending — done.");
+                return;
+            }
+
+            if (uptimeMs > UPTIME_RESET_MS) crashStreak = 0;
+            long delayMs = backoffs[Math.min(crashStreak, backoffs.length - 1)];
+            crashStreak++;
+            LOG.warning("[launcher] App exited with code " + exit + " after "
+                + uptimeMs + " ms — restart attempt #" + crashStreak
+                + " in " + delayMs + " ms.");
+
+            if (splash != null) {
+                splash.setStatus("PoS Agent crashed — restarting…");
+                splash.setDetail("Exit code " + exit + " · retry in " + (delayMs / 1000) + "s");
+                splash.setIndeterminate();
+                splash.show();
+            }
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private static final long UPTIME_RESET_MS = 60_000L;
+
+    private static int runOnce(Path appHome, LauncherSplash splash) throws Exception {
         Path localConfig = appHome.resolve("config.xml");
 
         if (splash != null) {
@@ -173,6 +223,7 @@ public final class Launcher {
         }
         int exit = launchQuarkus(appHome, splash);
         LOG.info("[launcher] Application exited with code " + exit);
+        return exit;
     }
 
     private static int launchQuarkus(Path appHome, LauncherSplash splash) throws IOException, InterruptedException {
