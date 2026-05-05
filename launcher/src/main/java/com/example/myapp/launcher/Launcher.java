@@ -59,6 +59,11 @@ public final class Launcher {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(30);
 
+    // Set by WinSW (-Dpos.service=true) when the launcher is running as a
+    // Windows service. Session 0 services have no display and no user, so the
+    // splash must not appear and we must not try to open a browser.
+    private static final boolean SERVICE_MODE = Boolean.getBoolean("pos.service");
+
     private Launcher() {
     }
 
@@ -75,8 +80,22 @@ public final class Launcher {
         configureFileLogging(appHome);
 
         LOG.info("[launcher] APP_HOME=" + appHome);
+        if (SERVICE_MODE) {
+            LOG.info("[launcher] Service mode active — splash and browser auto-open disabled.");
+        }
 
-        LauncherSplash splash = LauncherSplash.createOrNull();
+        // If the Windows service is already running, don't start a second
+        // Quarkus on port 8080 — just point the user at the running one.
+        // Skip this check in service mode itself (the service is the thing
+        // that's serving), and never short-circuit if app.home was forced
+        // to a custom path (developer running two instances on purpose).
+        if (!SERVICE_MODE && System.getProperty("app.home") == null && isAlreadyServing(8080)) {
+            LOG.info("[launcher] PoS Agent already serving on http://localhost:8080 — opening browser and exiting.");
+            openBrowser("http://localhost:8080");
+            return;
+        }
+
+        LauncherSplash splash = SERVICE_MODE ? null : LauncherSplash.createOrNull();
         if (splash != null) {
             splash.setStatus("Starting PoS Agent…");
             splash.setIndeterminate();
@@ -267,8 +286,12 @@ public final class Launcher {
                     splash.setStatus("PoS Agent is ready");
                     splash.setDetail("Opening browser…");
                 }
-                openBrowser("http://localhost:8080");
-                try { Thread.sleep(900); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                if (!SERVICE_MODE) {
+                    openBrowser("http://localhost:8080");
+                    try { Thread.sleep(900); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                } else {
+                    LOG.info("[launcher] Quarkus is up on http://localhost:8080");
+                }
             }
             if (splash != null) splash.hide();
         }, "myapp-splash-waiter");
@@ -304,6 +327,38 @@ public final class Launcher {
         }
     }
 
+    /**
+     * Quick probe for "is our app already serving on this port?" — used by
+     * the GUI launcher to detect that the Windows service is running so
+     * it can just open the browser instead of starting a second JVM and
+     * losing the bind on 8080.
+     *
+     * Two-stage: a 250ms TCP connect (cheap, lets us bail when nothing is
+     * listening), then a 2s GET on /api/info to confirm it's our app and
+     * not some random other process squatting on the port.
+     */
+    private static boolean isAlreadyServing(int port) {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 250);
+        } catch (IOException e) {
+            return false;
+        }
+        try {
+            HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(500))
+                .build();
+            HttpRequest req = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/info"))
+                .timeout(Duration.ofSeconds(2))
+                .GET()
+                .build();
+            HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            return resp.statusCode() == 200 && resp.body().contains("\"version\"");
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     private static boolean waitForPortOrExit(Process proc, int port, long timeoutMillis) {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
@@ -326,6 +381,17 @@ public final class Launcher {
         String prop = System.getProperty("app.home");
         if (prop != null && !prop.isBlank()) {
             return Path.of(prop);
+        }
+        // Service mode runs as LocalSystem; APPDATA there points at
+        // C:\Windows\System32\config\systemprofile\AppData\Roaming, which is
+        // both ugly and undiscoverable. Use ProgramData so logs and the
+        // downloaded app payload land somewhere admins actually expect.
+        if (SERVICE_MODE && isWindows()) {
+            String programData = System.getenv("ProgramData");
+            if (programData == null || programData.isBlank()) {
+                programData = "C:\\ProgramData";
+            }
+            return Path.of(programData, "PoS Agent");
         }
         String appdata = System.getenv("APPDATA");
         if (appdata != null && !appdata.isBlank()) {

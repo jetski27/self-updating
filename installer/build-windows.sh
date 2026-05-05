@@ -29,6 +29,7 @@ jpackage \
   --main-class com.example.myapp.launcher.Launcher \
   --java-options "-Dgithub.owner=jetski27" \
   --java-options "-Dgithub.repo=self-updating" \
+  --add-launcher "PoS Agent Service=installer/launcher-service.properties" \
   --win-dir-chooser \
   --win-menu \
   --win-menu-group "Azry" \

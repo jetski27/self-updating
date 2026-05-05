@@ -69,3 +69,44 @@ Open <http://localhost:8080>.
    `restart-pending` event; the Dashboard shows a banner.
 5. User clicks **Restart** → app writes `%APPDATA%/PoS Agent/.restart-pending` and
    exits → launcher's loop sees the marker and re-runs the update.
+
+## Run as a Windows service
+
+The Windows installer registers a `PoS Agent Service` Windows service during
+install and starts it as the final step. No post-install scripts, no second
+UAC prompt — when the installer wizard finishes, the service is already
+running and the app is reachable at <http://localhost:8080>.
+
+This is wired up via jpackage's native `--launcher-as-service` flag (see
+`installer/launcher-service.properties` and `installer/build-windows.sh`).
+jpackage emits a WiX fragment that uses an NSSM-style supervisor so our Java
+code doesn't need to integrate with the Service Control Manager directly —
+the launcher's existing supervisor loop keeps handling Quarkus restarts and
+self-updates.
+
+**Manage** with standard Windows tools:
+
+```powershell
+sc.exe start  "PoS Agent Service"
+sc.exe stop   "PoS Agent Service"
+sc.exe query  "PoS Agent Service"
+# or open services.msc
+```
+
+Notes:
+
+- The service runs under `LocalSystem` by default (jpackage's WiX template).
+  Change the identity in `services.msc` → PoS Agent Service → Log On if you
+  need a real user account.
+- `app.home` resolves to `%ProgramData%\PoS Agent` in service mode so logs
+  and downloaded jars don't end up under
+  `C:\Windows\System32\config\systemprofile\AppData`.
+- Service mode skips the splash window and browser auto-open (Session 0 has
+  no display). Open <http://localhost:8080> yourself, or set a desktop
+  shortcut to that URL.
+- `PoS Agent.exe` (the interactive launcher) still ships in the install dir
+  for development/debugging. If the service is already running, double-clicking
+  it just opens the browser at <http://localhost:8080> and exits — no second
+  JVM, no port conflict. Override with `-Dapp.home=…` to force a parallel
+  instance for development.
+- Logs: `%ProgramData%\PoS Agent\logs\` (`launcher.log`, `quarkus.log`).
