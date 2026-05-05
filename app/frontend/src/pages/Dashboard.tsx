@@ -56,6 +56,7 @@ export default function Dashboard() {
 
   return (
     <>
+      <h1>review time!</h1>
       {status === 'RESTART_PENDING' && (
         <div className="banner">
           <span>Version {pendingVersion} is ready. Restart now to apply.</span>
