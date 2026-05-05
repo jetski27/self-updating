@@ -2,19 +2,22 @@ package com.example.myapp.launcher;
 
 import com.formdev.flatlaf.FlatDarkLaf;
 
+import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.geom.RoundRectangle2D;
+import java.awt.image.BufferedImage;
+import java.net.URL;
 
 /**
  * Modern splash window shown by the launcher during the update + boot phase.
  *
  * Visual design:
- *   - Undecorated, rounded-corner JFrame (480×220).
- *   - FlatLaf "FlatDark" L&F so the progress bar / labels look 2024-era.
+ *   - Undecorated, rounded-corner JFrame (520×260).
+ *   - FlatDark L&F so the progress bar / labels look 2024-era.
+ *   - Pulsing Azry logo on the left, app title + "by Azry" on the right.
  *   - Soft fade-in on first show, fade-out on hide.
- *   - Large status line, thin animated progress bar with percent overlay,
- *     muted detail line beneath.
+ *   - Status line, thin animated progress bar, muted detail line beneath.
  *
  * Created lazily via {@link #createOrNull()} — if anything Swing-related
  * fails (headless, classloader, missing java.desktop module) we silently
@@ -30,10 +33,13 @@ final class LauncherSplash {
     private static final Color FG_DETAIL = new Color(0x9DA0A4);
     private static final Color ACCENT = new Color(0x4E89F2);
 
+    private static final int LOGO_PX = 64;
+
     private final JFrame frame;
     private final JLabel statusLabel;
     private final JLabel detailLabel;
     private final JProgressBar bar;
+    private final PulsingLogo pulsingLogo;
 
     private Timer fadeTimer;
 
@@ -52,13 +58,11 @@ final class LauncherSplash {
         try {
             FlatDarkLaf.setup();
             UIManager.put("ProgressBar.arc", 999);
-            UIManager.put("ProgressBar.selectionBackground", FG_TITLE);
-            UIManager.put("ProgressBar.selectionForeground", FG_TITLE);
         } catch (Throwable ignored) {
             // Fall through to whatever default L&F is available.
         }
 
-        frame = new JFrame("MyApp");
+        frame = new JFrame("PoS Agent");
         frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         frame.setUndecorated(true);
         frame.setResizable(false);
@@ -66,21 +70,41 @@ final class LauncherSplash {
         frame.setBackground(BG);
         try { frame.setOpacity(0f); } catch (Exception ignored) { /* graphics device may not support translucency */ }
 
-        JPanel root = new JPanel();
-        root.setLayout(new BoxLayout(root, BoxLayout.Y_AXIS));
-        root.setBackground(BG_CARD);
-        root.setBorder(BorderFactory.createEmptyBorder(28, 32, 26, 32));
+        BufferedImage logo = loadLogo();
+        pulsingLogo = (logo != null) ? new PulsingLogo(logo, LOGO_PX) : null;
 
-        JLabel title = new JLabel("MyApp");
+        JPanel root = new JPanel(new BorderLayout(0, 18));
+        root.setBackground(BG_CARD);
+        root.setBorder(BorderFactory.createEmptyBorder(26, 28, 22, 28));
+
+        JPanel header = new JPanel(new BorderLayout(16, 0));
+        header.setOpaque(false);
+        if (pulsingLogo != null) header.add(pulsingLogo, BorderLayout.WEST);
+
+        JPanel titles = new JPanel();
+        titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
+        titles.setOpaque(false);
+
+        JLabel title = new JLabel("PoS Agent");
         title.setForeground(FG_TITLE);
-        title.setFont(deriveFont(Font.BOLD, 22f));
+        title.setFont(deriveFont(Font.BOLD, 24f));
         title.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel subtitle = new JLabel("Self-updating desktop app");
+        JLabel subtitle = new JLabel("by Azry");
         subtitle.setForeground(FG_DETAIL);
-        subtitle.setFont(deriveFont(Font.PLAIN, 11f));
+        subtitle.setFont(deriveFont(Font.PLAIN, 12f));
         subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-        subtitle.setBorder(BorderFactory.createEmptyBorder(2, 0, 22, 0));
+        subtitle.setBorder(BorderFactory.createEmptyBorder(2, 0, 0, 0));
+
+        titles.add(Box.createVerticalGlue());
+        titles.add(title);
+        titles.add(subtitle);
+        titles.add(Box.createVerticalGlue());
+        header.add(titles, BorderLayout.CENTER);
+
+        JPanel body = new JPanel();
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.setOpaque(false);
 
         statusLabel = new JLabel("Starting…");
         statusLabel.setForeground(FG_STATUS);
@@ -106,19 +130,17 @@ final class LauncherSplash {
         detailLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         detailLabel.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
 
-        root.add(title);
-        root.add(subtitle);
-        root.add(statusLabel);
-        root.add(bar);
-        root.add(detailLabel);
+        body.add(statusLabel);
+        body.add(bar);
+        body.add(detailLabel);
+
+        root.add(header, BorderLayout.NORTH);
+        root.add(body, BorderLayout.CENTER);
 
         frame.setContentPane(root);
-        frame.setSize(480, 220);
+        frame.setSize(520, 260);
         frame.setLocationRelativeTo(null);
 
-        // Rounded corners. Win11 rounds undecorated windows automatically via
-        // DWM, but setting a shape works on Win10/older too and gives a
-        // consistent radius across versions.
         try {
             frame.setShape(new RoundRectangle2D.Float(0, 0, frame.getWidth(), frame.getHeight(), 18, 18));
         } catch (Exception ignored) {
@@ -129,6 +151,7 @@ final class LauncherSplash {
     void show() {
         runOnEdt(() -> {
             frame.setVisible(true);
+            if (pulsingLogo != null) pulsingLogo.start();
             fade(true);
         });
     }
@@ -140,6 +163,7 @@ final class LauncherSplash {
     void dispose() {
         runOnEdt(() -> {
             stopFade();
+            if (pulsingLogo != null) pulsingLogo.stop();
             frame.dispose();
         });
     }
@@ -165,11 +189,12 @@ final class LauncherSplash {
             if (bar.isIndeterminate()) bar.setIndeterminate(false);
             bar.setStringPainted(false);
             bar.setValue(pct);
-            detailLabel.setText(detailHint() + "  ·  " + pct + "%");
+            String hint = currentDetailHint();
+            detailLabel.setText(hint.isEmpty() ? pct + "%" : hint + "  ·  " + pct + "%");
         });
     }
 
-    private String detailHint() {
+    private String currentDetailHint() {
         String t = detailLabel.getText();
         if (t == null) return "";
         int sep = t.indexOf("  ·  ");
@@ -192,7 +217,6 @@ final class LauncherSplash {
             });
             fadeTimer.start();
         } catch (Exception ignored) {
-            // Translucency not supported — fall back to instant show/hide.
             try { frame.setOpacity(in ? 1f : 0f); } catch (Exception e2) { /* nothing */ }
             if (!in) frame.setVisible(false);
         }
@@ -203,12 +227,20 @@ final class LauncherSplash {
         fadeTimer = null;
     }
 
+    private static BufferedImage loadLogo() {
+        try {
+            URL url = LauncherSplash.class.getResource("/azry.png");
+            return url == null ? null : ImageIO.read(url);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static float clamp(float v, float lo, float hi) {
         return Math.max(lo, Math.min(hi, v));
     }
 
     private static Font deriveFont(int style, float size) {
-        // Prefer Segoe UI on Windows for that modern look; fall back to L&F default.
         Font seg = new Font("Segoe UI", style, Math.round(size));
         if (seg.getFamily().equalsIgnoreCase("Segoe UI")) return seg;
         Font def = UIManager.getFont("Label.font");
@@ -242,5 +274,60 @@ final class LauncherSplash {
         @SuppressWarnings("unchecked")
         T t = (T) holder[0];
         return t;
+    }
+
+    /**
+     * Pulsing logo: oscillates alpha (0.55 → 1.0) and scale (0.95 → 1.05) on a
+     * sine wave so the logo "breathes" while the launcher is working. Source
+     * image is kept at original resolution and downsampled at paint time so it
+     * stays crisp on HiDPI displays.
+     */
+    private static final class PulsingLogo extends JComponent {
+        private final BufferedImage image;
+        private final int sizePx;
+        private float phase = 0f;
+        private final Timer timer;
+
+        PulsingLogo(BufferedImage image, int sizePx) {
+            this.image = image;
+            this.sizePx = sizePx;
+            Dimension d = new Dimension(sizePx + 8, sizePx + 8);
+            setPreferredSize(d);
+            setMinimumSize(d);
+            setMaximumSize(d);
+            setOpaque(false);
+            timer = new Timer(33, e -> {
+                phase += 0.07f;
+                if (phase > Math.PI * 2) phase -= (float) (Math.PI * 2);
+                repaint();
+            });
+        }
+
+        void start() { if (!timer.isRunning()) timer.start(); }
+        void stop()  { if (timer.isRunning()) timer.stop(); }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            if (image == null) return;
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+
+            float wave = (float) ((Math.sin(phase) + 1.0) / 2.0); // 0..1
+            float alpha = 0.55f + 0.45f * wave;                   // 0.55..1.0
+            float scale = 0.95f + 0.10f * wave;                   // 0.95..1.05
+
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
+
+            int cx = getWidth() / 2;
+            int cy = getHeight() / 2;
+            int dim = Math.round(sizePx * scale);
+            int x = cx - dim / 2;
+            int y = cy - dim / 2;
+            g2.drawImage(image, x, y, dim, dim, null);
+
+            g2.dispose();
+        }
     }
 }
