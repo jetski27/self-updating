@@ -18,6 +18,35 @@ JAVA_HOME_DIR="${JAVA_HOME:?JAVA_HOME is required}"
 
 mkdir -p installer/output
 
+# jpackage's --launcher-as-service on Windows expects a Windows-service
+# supervisor binary at <resource-dir>/service-installer.exe. The OpenJDK
+# build does NOT bundle one, but the WiX templates jpackage emits
+# (service-config.wxi) write NSSM-style registry values — meaning NSSM is
+# the supervisor jpackage was designed to wrap. So we fetch nssm.exe and
+# rename it to service-installer.exe for jpackage to pick up.
+RESOURCE_DIR="$ROOT/installer/resources"
+SERVICE_INSTALLER="$RESOURCE_DIR/service-installer.exe"
+NSSM_VERSION="2.24"
+NSSM_URL="https://nssm.cc/release/nssm-${NSSM_VERSION}.zip"
+NSSM_SHA256="727D1E42275C605E0F04ABA98095C38A8E1E46DEF453CDFFCE42869428AA6743"
+
+mkdir -p "$RESOURCE_DIR"
+if [[ ! -f "$SERVICE_INSTALLER" ]]; then
+  echo "==> Fetching NSSM ${NSSM_VERSION} for service-installer.exe"
+  TMP_NSSM_ZIP="$(mktemp)"
+  TMP_NSSM_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_NSSM_ZIP" "$TMP_NSSM_DIR"' EXIT
+  curl -fsSL -o "$TMP_NSSM_ZIP" "$NSSM_URL"
+  ACTUAL_SHA="$(sha256sum "$TMP_NSSM_ZIP" | awk '{print toupper($1)}')"
+  if [[ "$ACTUAL_SHA" != "$NSSM_SHA256" ]]; then
+    echo "error: NSSM SHA-256 mismatch. Expected $NSSM_SHA256, got $ACTUAL_SHA" >&2
+    exit 1
+  fi
+  unzip -q -d "$TMP_NSSM_DIR" "$TMP_NSSM_ZIP"
+  cp "$TMP_NSSM_DIR/nssm-${NSSM_VERSION}/win64/nssm.exe" "$SERVICE_INSTALLER"
+  echo "==> Wrote $SERVICE_INSTALLER"
+fi
+
 jpackage \
   --type exe \
   --name "PoS Agent" \
@@ -30,6 +59,7 @@ jpackage \
   --java-options "-Dgithub.owner=jetski27" \
   --java-options "-Dgithub.repo=self-updating" \
   --add-launcher "PoS Agent Service=installer/launcher-service.properties" \
+  --resource-dir "$RESOURCE_DIR" \
   --win-dir-chooser \
   --win-menu \
   --win-menu-group "Azry" \
