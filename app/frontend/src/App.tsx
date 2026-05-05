@@ -6,7 +6,13 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="brand">PoS Agent</div>
+        <div className="brand">
+          <img src="/azry.png" alt="Azry" className="brand-logo" />
+          <div className="brand-text">
+            <span className="brand-name">PoS Agent</span>
+            <span className="brand-vendor">by Azry</span>
+          </div>
+        </div>
         <nav>
           <Link to="/">Dashboard</Link>
           <Link to="/settings">Settings</Link>

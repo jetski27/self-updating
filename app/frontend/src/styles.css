@@ -50,9 +50,36 @@ body {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  /* The Azry mark ships as white-on-transparent; invert to dark on light themes
+     so it actually shows up against --surface, then back to white in dark mode. */
+  filter: invert(1);
+}
+@media (prefers-color-scheme: dark) {
+  .brand-logo { filter: none; }
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.brand-name {
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   letter-spacing: 0.02em;
+}
+.brand-vendor {
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .app-header nav { display: flex; gap: 1rem; }
