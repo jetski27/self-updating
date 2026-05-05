@@ -136,6 +136,20 @@ body {
   font-weight: 500;
 }
 
+.fight-stage {
+  margin-top: 1.5rem;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.35);
+}
+.fight-stage .pixel-fight {
+  display: block;
+  width: 100%;
+  height: 200px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 .card {
   border: 1px solid var(--border);
   border-radius: 10px;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useUpdateEvents, type UpdateStatus } from '../hooks/useUpdateEvents';
 import AnimatedHero from '../components/AnimatedHero';
+import PixelFight from '../components/PixelFight';
 
 interface AppInfo {
   version: string;
@@ -100,6 +101,10 @@ export default function Dashboard() {
           <div className="v">{hello ? `${hello.message} (v${hello.version})` : '…'}</div>
         </div>
       </div>
+
+      <section className="fight-stage">
+        <PixelFight />
+      </section>
     </>
   );
 }
