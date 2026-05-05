@@ -75,20 +75,41 @@ public final class Launcher {
 
         LOG.info("[launcher] APP_HOME=" + appHome);
 
+        LauncherSplash splash = LauncherSplash.createOrNull();
+        if (splash != null) {
+            splash.setStatus("Starting MyApp…");
+            splash.setIndeterminate();
+            splash.show();
+        }
+
         try {
             do {
-                runOnce(appHome);
+                runOnce(appHome, splash);
             } while (consumeRestartFlag(appHome));
         } catch (Throwable t) {
             LOG.log(Level.SEVERE, "[launcher] FATAL", t);
             System.err.println("[launcher] FATAL: " + t.getMessage());
             t.printStackTrace(System.err);
+            if (splash != null) {
+                splash.setStatus("Failed to start");
+                splash.setDetail(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
+                try { Thread.sleep(2500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            }
             System.exit(1);
+        } finally {
+            if (splash != null) splash.dispose();
         }
     }
 
-    private static void runOnce(Path appHome) throws Exception {
+    private static void runOnce(Path appHome, LauncherSplash splash) throws Exception {
         Path localConfig = appHome.resolve("config.xml");
+
+        if (splash != null) {
+            splash.setStatus("Checking for updates…");
+            splash.setDetail("Contacting GitHub");
+            splash.setIndeterminate();
+            splash.show();
+        }
 
         if (!Files.exists(localConfig)) {
             seedFromInstallDir(appHome);
@@ -101,6 +122,7 @@ public final class Launcher {
 
         try {
             String tag = fetchLatestTag(owner, repo);
+            if (splash != null) splash.setDetail("Latest release: " + tag);
             URI remoteConfigUri = URI.create(
                 "https://github.com/" + owner + "/" + repo + "/releases/download/" + tag + "/config.xml");
             LOG.info("[launcher] Fetching remote config: " + remoteConfigUri);
@@ -110,7 +132,11 @@ public final class Launcher {
             }
 
             LOG.info("[launcher] Running update4j update...");
-            boolean updated = config.update(new LoggingUpdateHandler());
+            if (splash != null) {
+                splash.setStatus("Applying update…");
+                splash.setDetail("Comparing local files");
+            }
+            boolean updated = config.update(new LoggingUpdateHandler(splash));
             LOG.info("[launcher] Update finished. Files changed: " + updated);
 
             try (InputStream in = openStream(remoteConfigUri)) {
@@ -121,6 +147,9 @@ public final class Launcher {
                 "[launcher] Remote update check failed (" + remoteFailure.getClass().getSimpleName()
                     + "): " + remoteFailure.getMessage() + " — falling back to local cached config.",
                 remoteFailure);
+            if (splash != null) {
+                splash.setDetail("Offline — using cached version");
+            }
 
             if (!Files.isRegularFile(localConfig)) {
                 throw new IllegalStateException(
@@ -136,11 +165,16 @@ public final class Launcher {
         LOG.info("[launcher] Launching application...");
         // Silence unused warning; we may log details later.
         if (config == null) throw new IllegalStateException("no configuration");
-        int exit = launchQuarkus(appHome);
+        if (splash != null) {
+            splash.setStatus("Launching MyApp…");
+            splash.setDetail("Open http://localhost:8080 once it's ready");
+            splash.setIndeterminate();
+        }
+        int exit = launchQuarkus(appHome, splash);
         LOG.info("[launcher] Application exited with code " + exit);
     }
 
-    private static int launchQuarkus(Path appHome) throws IOException, InterruptedException {
+    private static int launchQuarkus(Path appHome, LauncherSplash splash) throws IOException, InterruptedException {
         Path javaBin = Path.of(
             System.getProperty("java.home"),
             "bin",
@@ -170,11 +204,42 @@ public final class Launcher {
             }
         }, "myapp-launcher-shutdown");
         Runtime.getRuntime().addShutdownHook(hook);
+
+        // Wait for Quarkus to be reachable on 8080 (or for it to die early), then
+        // hide the splash. The launcher process keeps the EDT alive until main()
+        // returns, so dispose() comes from the finally in main().
+        if (splash != null) {
+            Thread waiter = new Thread(() -> {
+                if (waitForPortOrExit(proc, 8080, 60_000)) {
+                    splash.setStatus("MyApp is ready");
+                    splash.setDetail("Open http://localhost:8080");
+                    try { Thread.sleep(800); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                }
+                splash.hide();
+            }, "myapp-splash-waiter");
+            waiter.setDaemon(true);
+            waiter.start();
+        }
+
         try {
             return proc.waitFor();
         } finally {
             try { Runtime.getRuntime().removeShutdownHook(hook); } catch (IllegalStateException ignored) { /* JVM already shutting down */ }
         }
+    }
+
+    private static boolean waitForPortOrExit(Process proc, int port, long timeoutMillis) {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            if (!proc.isAlive()) return false;
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 250);
+                return true;
+            } catch (IOException e) {
+                try { Thread.sleep(200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return false; }
+            }
+        }
+        return false;
     }
 
     private static boolean isWindows() {
@@ -325,8 +390,13 @@ public final class Launcher {
 
     private static final class LoggingUpdateHandler implements UpdateHandler {
 
+        private final LauncherSplash splash;
         private String currentFile;
         private long currentSize;
+
+        LoggingUpdateHandler(LauncherSplash splash) {
+            this.splash = splash;
+        }
 
         @Override
         public long version() {
@@ -334,10 +404,26 @@ public final class Launcher {
         }
 
         @Override
+        public void startDownloads() {
+            if (splash != null) {
+                splash.setStatus("Downloading update…");
+                splash.setProgress(0f);
+            }
+        }
+
+        @Override
         public void startDownloadFile(org.update4j.FileMetadata file) {
             this.currentFile = file.getPath().getFileName().toString();
             this.currentSize = file.getSize();
             LOG.info(String.format("[launcher] downloading %s (%d bytes)", currentFile, currentSize));
+            if (splash != null) {
+                splash.setDetail(currentFile + " — " + formatBytes(currentSize));
+            }
+        }
+
+        @Override
+        public void updateDownloadProgress(float frac) {
+            if (splash != null) splash.setProgress(frac);
         }
 
         @Override
@@ -346,8 +432,27 @@ public final class Launcher {
         }
 
         @Override
+        public void doneDownloads() {
+            if (splash != null) {
+                splash.setStatus("Installing update…");
+                splash.setDetail("Replacing files");
+                splash.setIndeterminate();
+            }
+        }
+
+        @Override
         public void failed(Throwable t) {
             LOG.log(Level.WARNING, "[launcher] update failed: " + t.getMessage(), t);
+            if (splash != null) {
+                splash.setStatus("Update failed");
+                splash.setDetail(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
+            }
+        }
+
+        private static String formatBytes(long n) {
+            if (n < 1024) return n + " B";
+            if (n < 1024 * 1024) return String.format("%.1f KiB", n / 1024.0);
+            return String.format("%.2f MiB", n / 1024.0 / 1024.0);
         }
     }
 }
