@@ -74,7 +74,7 @@ export default function Dashboard() {
           <span className={CHIP_CLASS[status]}>{CHIP_LABEL[status]}</span>
         </div>
 
-        <p style={{ marginTop: '0.75rem', color: 'var(--muted)' }}>Hi, this is a new update</p>
+        <p style={{ marginTop: '0.75rem', color: 'var(--muted)' }}>Hi, this is update #2 — applied via Settings</p>
 
         {status === 'DOWNLOADING' && (
           <div style={{ marginTop: '0.75rem' }}>
