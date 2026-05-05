@@ -1,6 +1,6 @@
 # PoS Agent
 
-Production-ready, self-updating desktop application by Azry.
+self-updating desktop application by Azry.
 
 - **Backend**: Quarkus 3.15 (JVM, fast-jar)
 - **Frontend**: Vite + React + TypeScript, embedded via Quarkus Quinoa
