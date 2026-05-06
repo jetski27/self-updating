@@ -3,36 +3,30 @@ package com.example.myapp.launcher;
 /*
  * Launcher lifecycle
  * ------------------
- * 1. Detect mode: desktop (default) or service (--service flag, or PoSAgent_SERVICE=1
- *    env var set by WinSW). Service mode picks %PROGRAMDATA%\PoS Agent for state and
- *    suppresses splash + browser open since the process runs in Session 0.
- * 2. Resolve APP_HOME (system prop -Dapp.home > mode-specific default).
- *    Set it as a system property so update4j's ${app.home} placeholder in config.xml
- *    resolves to it. In service mode, migrate state from a pre-existing
- *    %APPDATA%\PoS Agent so upgraders don't lose their cached config.
- * 3. Configure file logging at ${APP_HOME}/logs/launcher.log so jpackage's
- *    windowless PoS Agent.exe still leaves a forensic trail.
- * 4. First-run seeding: if ${APP_HOME} is empty, copy the bundled payload
- *    that the installer dropped at ${install_dir}/app/ over to ${APP_HOME}.
- *    This lets the app boot offline on first run.
- * 5. Try to discover the latest GitHub release and read the remote config.xml.
- * 6. Run config.update(...) which sha-256-compares each file and downloads
- *    only what changed. Logs each file + size as it streams.
- * 7. On success, persist the new config.xml to ${APP_HOME}/config.xml. On any
- *    network/parse failure we log a warning and fall through to launch with
- *    the cached config.
- * 8. Spawn a child JVM with `java -jar ${APP_HOME}/quarkus-run.jar`. Quarkus
- *    fast-jar relies on its own classloader hierarchy and assumes it's the
- *    process entry point — running it via update4j's reflective Class.forName
- *    breaks the bootstrap. Child stdout/stderr go to ${APP_HOME}/logs/quarkus.log.
- *    Blocking — returns when Quarkus exits.
- * 9. If ${APP_HOME}/.restart-pending exists, delete it and loop back to 5.
+ * 1. Resolve APP_HOME (-Dapp.home > %PROGRAMDATA%\PoS Agent on Windows >
+ *    ~/.posagent elsewhere). Set as a system property so update4j's
+ *    ${app.home} placeholder in config.xml resolves to it.
+ * 2. Configure file logging at ${APP_HOME}/logs/launcher.log.
+ * 3. Install a JVM shutdown hook so SCM/WinSW stop signals destroy the
+ *    Quarkus child cleanly instead of leaving it orphaned.
+ * 4. First-run seed: if ${APP_HOME} has no config.xml, copy the bundled
+ *    payload from launcher.jar's directory (the zip extract). Lets the
+ *    app boot offline on first run.
+ * 5. Fetch the latest release tag from GitHub and read its config.xml.
+ *    Run config.update(...) — sha-256 compares each file, downloads only
+ *    deltas. On any network failure, fall through to the local cached
+ *    config so a flaky network can't bring the kiosk down.
+ * 6. Spawn `java -jar quarkus-run.jar` as a child JVM. Quarkus's fast-jar
+ *    layout assumes it's the process entry point, so we don't run it
+ *    via update4j's reflective bootstrap. Block on the child.
+ * 7. When the child exits: if .restart-pending exists, loop back to 5.
+ *    Otherwise exit — clean exit cleanly, crash with the child's code so
+ *    WinSW's <onfailure action="restart"> handles recovery.
  */
 
 import org.update4j.Configuration;
 import org.update4j.service.UpdateHandler;
 
-import java.awt.Desktop;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -65,9 +59,9 @@ public final class Launcher {
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(30);
 
     /**
-     * Flipped by the service-mode shutdown hook when SCM (or WinSW) signals
-     * the process to stop. Once true, the supervisor loop returns without
-     * triggering crash-restart backoff.
+     * Flipped by the shutdown hook when SCM/WinSW signals a stop. The
+     * supervisor loop checks this before and after every child run so
+     * `sc stop PoSAgent` doesn't get ignored mid-cycle.
      */
     private static final AtomicBoolean STOPPING = new AtomicBoolean(false);
     private static volatile Process currentChild;
@@ -76,63 +70,41 @@ public final class Launcher {
     }
 
     public static void main(String[] args) {
-        boolean serviceMode = isServiceMode(args);
-        Path appHome = resolveAppHome(serviceMode);
+        Path appHome = resolveAppHome();
         try {
             Files.createDirectories(appHome);
         } catch (IOException e) {
             System.err.println("[launcher] cannot create " + appHome + ": " + e.getMessage());
             System.exit(1);
         }
-        if (serviceMode) {
-            migrateLegacyAppHome(appHome);
-        }
-        // Make ${app.home} resolvable inside update4j config.xml.
         System.setProperty("app.home", appHome.toString());
         configureFileLogging(appHome);
 
-        LOG.info("[launcher] mode=" + (serviceMode ? "service" : "desktop") + " APP_HOME=" + appHome);
+        LOG.info("[launcher] APP_HOME=" + appHome);
 
-        if (serviceMode) {
-            installServiceShutdownHook();
-        }
-
-        LauncherSplash splash = serviceMode ? null : LauncherSplash.createOrNull();
-        if (splash != null) {
-            splash.setStatus("Starting PoS Agent…");
-            splash.setIndeterminate();
-            splash.show();
-        }
+        installShutdownHook();
 
         try {
-            superviseAndRun(appHome, splash, serviceMode);
+            superviseAndRun(appHome);
         } catch (Throwable t) {
             LOG.log(Level.SEVERE, "[launcher] FATAL", t);
             System.err.println("[launcher] FATAL: " + t.getMessage());
             t.printStackTrace(System.err);
-            if (splash != null) {
-                splash.setStatus("Failed to start");
-                splash.setDetail(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
-                try { Thread.sleep(2500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-            }
             System.exit(1);
-        } finally {
-            if (splash != null) splash.dispose();
         }
     }
 
     /**
-     * In service mode, SIGTERM (or WinSW's stop signal) must terminate the
-     * supervisor loop without triggering crash-restart backoff. We hook
-     * shutdown, mark STOPPING, and forcibly destroy the Quarkus child so
-     * proc.waitFor() returns immediately. The main thread is also
-     * interrupted in case it's mid-backoff sleep.
+     * SCM stop signal -> destroy the Quarkus child so its waitFor returns,
+     * flip STOPPING so the supervisor loop exits cleanly. Without this the
+     * child would be orphaned and SCM would force-kill the launcher after
+     * stoptimeout.
      */
-    private static void installServiceShutdownHook() {
+    private static void installShutdownHook() {
         Thread main = Thread.currentThread();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             STOPPING.set(true);
-            LOG.info("[launcher] Service stop requested — shutting down.");
+            LOG.info("[launcher] Stop requested — shutting down.");
             Process child = currentChild;
             if (child != null && child.isAlive()) {
                 child.destroy();
@@ -146,88 +118,36 @@ public final class Launcher {
                 }
             }
             main.interrupt();
-        }, "posagent-service-shutdown"));
-    }
-
-    private static boolean isServiceMode(String[] args) {
-        for (String a : args) {
-            if ("--service".equals(a)) return true;
-        }
-        String env = System.getenv("POSAGENT_SERVICE");
-        if (env != null && (env.equals("1") || env.equalsIgnoreCase("true"))) return true;
-        String prop = System.getProperty("posagent.service");
-        return prop != null && (prop.equals("1") || prop.equalsIgnoreCase("true"));
+        }, "posagent-shutdown"));
     }
 
     /**
-     * Supervisor loop. Three exit reasons for the child Quarkus process:
-     *   1. Clean exit (code 0, no restart marker)  → quit launcher.
-     *   2. User-requested restart (marker present) → loop immediately, no backoff.
-     *   3. Crash (nonzero exit, no marker)         → exponential backoff and retry.
-     *
-     * Backoff resets when the app stays up longer than {@link #UPTIME_RESET_MS},
-     * so a flaky once-an-hour crash never lets the delay grow without bound.
-     * Cap is 60 s so kiosks recover quickly even after sustained failures.
+     * Two reasons to stay in the loop:
+     *   1. .restart-pending marker present (dashboard "Restart" after an
+     *      update) — re-run update4j and respawn.
+     *   2. Otherwise exit. WinSW's <onfailure action="restart"> handles
+     *      crash recovery at the service layer; we don't duplicate it.
+     *      Clean exit (code 0) just exits.
      */
-    private static void superviseAndRun(Path appHome, LauncherSplash splash, boolean serviceMode) throws Exception {
-        long[] backoffs = {1_000L, 2_000L, 5_000L, 10_000L, 30_000L, 60_000L};
-        int crashStreak = 0;
-
+    private static void superviseAndRun(Path appHome) throws Exception {
         while (true) {
-            if (STOPPING.get()) {
-                LOG.info("[launcher] Stop requested — exiting supervisor loop.");
-                return;
-            }
-            long startedAt = System.currentTimeMillis();
-            int exit = runOnce(appHome, splash, serviceMode);
-            long uptimeMs = System.currentTimeMillis() - startedAt;
-
-            if (STOPPING.get()) {
-                LOG.info("[launcher] Stop requested — exiting after child shutdown.");
-                return;
-            }
+            if (STOPPING.get()) return;
+            int exit = runOnce(appHome);
+            if (STOPPING.get()) return;
             if (consumeRestartFlag(appHome)) {
-                crashStreak = 0;
                 continue;
             }
-            if (exit == 0) {
-                LOG.info("[launcher] Clean exit, no restart pending — done.");
-                return;
+            if (exit != 0) {
+                LOG.warning("[launcher] Quarkus exited with code " + exit
+                    + " — propagating so WinSW restarts the service.");
+                System.exit(exit);
             }
-
-            if (uptimeMs > UPTIME_RESET_MS) crashStreak = 0;
-            long delayMs = backoffs[Math.min(crashStreak, backoffs.length - 1)];
-            crashStreak++;
-            LOG.warning("[launcher] App exited with code " + exit + " after "
-                + uptimeMs + " ms — restart attempt #" + crashStreak
-                + " in " + delayMs + " ms.");
-
-            if (splash != null) {
-                splash.setStatus("PoS Agent crashed — restarting…");
-                splash.setDetail("Exit code " + exit + " · retry in " + (delayMs / 1000) + "s");
-                splash.setIndeterminate();
-                splash.show();
-            }
-            try {
-                Thread.sleep(delayMs);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                return;
-            }
+            return;
         }
     }
 
-    private static final long UPTIME_RESET_MS = 60_000L;
-
-    private static int runOnce(Path appHome, LauncherSplash splash, boolean serviceMode) throws Exception {
+    private static int runOnce(Path appHome) throws Exception {
         Path localConfig = appHome.resolve("config.xml");
-
-        if (splash != null) {
-            splash.setStatus("Checking for updates…");
-            splash.setDetail("Contacting GitHub");
-            splash.setIndeterminate();
-            splash.show();
-        }
 
         if (!Files.exists(localConfig)) {
             seedFromInstallDir(appHome);
@@ -240,7 +160,6 @@ public final class Launcher {
 
         try {
             String tag = fetchLatestTag(owner, repo);
-            if (splash != null) splash.setDetail("Latest release: " + tag);
             URI remoteConfigUri = URI.create(
                 "https://github.com/" + owner + "/" + repo + "/releases/download/" + tag + "/config.xml");
             LOG.info("[launcher] Fetching remote config: " + remoteConfigUri);
@@ -250,11 +169,7 @@ public final class Launcher {
             }
 
             LOG.info("[launcher] Running update4j update...");
-            if (splash != null) {
-                splash.setStatus("Applying update…");
-                splash.setDetail("Comparing local files");
-            }
-            boolean updated = config.update(new LoggingUpdateHandler(splash));
+            boolean updated = config.update(new LoggingUpdateHandler());
             LOG.info("[launcher] Update finished. Files changed: " + updated);
 
             try (InputStream in = openStream(remoteConfigUri)) {
@@ -265,9 +180,6 @@ public final class Launcher {
                 "[launcher] Remote update check failed (" + remoteFailure.getClass().getSimpleName()
                     + "): " + remoteFailure.getMessage() + " — falling back to local cached config.",
                 remoteFailure);
-            if (splash != null) {
-                splash.setDetail("Offline — using cached version");
-            }
 
             if (!Files.isRegularFile(localConfig)) {
                 throw new IllegalStateException(
@@ -280,20 +192,14 @@ public final class Launcher {
             }
         }
 
-        LOG.info("[launcher] Launching application...");
-        // Silence unused warning; we may log details later.
         if (config == null) throw new IllegalStateException("no configuration");
-        if (splash != null) {
-            splash.setStatus("Launching PoS Agent…");
-            splash.setDetail("Open http://localhost:8080 once it's ready");
-            splash.setIndeterminate();
-        }
-        int exit = launchQuarkus(appHome, splash, serviceMode);
+        LOG.info("[launcher] Launching application...");
+        int exit = launchQuarkus(appHome);
         LOG.info("[launcher] Application exited with code " + exit);
         return exit;
     }
 
-    private static int launchQuarkus(Path appHome, LauncherSplash splash, boolean serviceMode) throws IOException, InterruptedException {
+    private static int launchQuarkus(Path appHome) throws IOException, InterruptedException {
         Path javaBin = Path.of(
             System.getProperty("java.home"),
             "bin",
@@ -318,163 +224,48 @@ public final class Launcher {
         LOG.info("[launcher] Starting Quarkus: " + pb.command());
         Process proc = pb.start();
         currentChild = proc;
-        Thread hook = new Thread(() -> {
-            if (proc.isAlive()) {
-                proc.destroy();
-            }
-        }, "myapp-launcher-shutdown");
-        Runtime.getRuntime().addShutdownHook(hook);
-
-        // Wait for Quarkus to be reachable on 8080 (or for it to die early). In
-        // desktop mode we open the user's browser and dismiss the splash; in
-        // service mode the JVM runs in Session 0 so neither makes sense — we
-        // just log readiness.
-        Thread waiter = new Thread(() -> {
-            boolean ready = waitForPortOrExit(proc, 8080, 60_000);
-            if (ready) {
-                LOG.info("[launcher] Quarkus is reachable on http://localhost:8080");
-                if (!serviceMode) {
-                    if (splash != null) {
-                        splash.setStatus("PoS Agent is ready");
-                        splash.setDetail("Opening browser…");
-                    }
-                    openBrowser("http://localhost:8080");
-                    try { Thread.sleep(900); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                }
-            }
-            if (splash != null) splash.hide();
-        }, "myapp-splash-waiter");
-        waiter.setDaemon(true);
-        waiter.start();
-
         try {
             return proc.waitFor();
         } finally {
             currentChild = null;
-            try { Runtime.getRuntime().removeShutdownHook(hook); } catch (IllegalStateException ignored) { /* JVM already shutting down */ }
         }
-    }
-
-    private static void openBrowser(String url) {
-        try {
-            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
-                Desktop.getDesktop().browse(URI.create(url));
-                return;
-            }
-        } catch (Exception e) {
-            LOG.log(Level.FINE, "[launcher] Desktop.browse failed, falling back to OS shell", e);
-        }
-        try {
-            if (isWindows()) {
-                new ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", url).start();
-            } else {
-                String os = System.getProperty("os.name", "").toLowerCase();
-                if (os.contains("mac")) new ProcessBuilder("open", url).start();
-                else new ProcessBuilder("xdg-open", url).start();
-            }
-        } catch (Exception e) {
-            LOG.log(Level.WARNING, "[launcher] Could not open browser: " + e.getMessage(), e);
-        }
-    }
-
-    private static boolean waitForPortOrExit(Process proc, int port, long timeoutMillis) {
-        long deadline = System.currentTimeMillis() + timeoutMillis;
-        while (System.currentTimeMillis() < deadline) {
-            if (!proc.isAlive()) return false;
-            try (java.net.Socket s = new java.net.Socket()) {
-                s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 250);
-                return true;
-            } catch (IOException e) {
-                try { Thread.sleep(200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return false; }
-            }
-        }
-        return false;
     }
 
     private static boolean isWindows() {
         return System.getProperty("os.name", "").toLowerCase().contains("windows");
     }
 
-    private static Path resolveAppHome(boolean serviceMode) {
+    private static Path resolveAppHome() {
         String prop = System.getProperty("app.home");
         if (prop != null && !prop.isBlank()) {
             return Path.of(prop);
         }
-        if (serviceMode) {
+        if (isWindows()) {
             String programData = System.getenv("ProgramData");
             if (programData != null && !programData.isBlank()) {
                 return Path.of(programData, "PoS Agent");
             }
-            // Fallback for non-Windows test runs of service mode.
-            return Path.of("/var/lib/posagent");
-        }
-        String appdata = System.getenv("APPDATA");
-        if (appdata != null && !appdata.isBlank()) {
-            return Path.of(appdata, "PoS Agent");
         }
         return Path.of(System.getProperty("user.home"), ".posagent");
     }
 
     /**
-     * One-time migration from the desktop-mode %APPDATA% location to the
-     * service-mode %PROGRAMDATA% location. Runs only when the new home is
-     * empty and the legacy home has a config.xml — so reinstalls and reverts
-     * are idempotent. Best-effort; failures are logged but non-fatal.
-     */
-    private static void migrateLegacyAppHome(Path serviceHome) {
-        try {
-            if (Files.exists(serviceHome.resolve("config.xml"))) return;
-            String appdata = System.getenv("APPDATA");
-            if (appdata == null || appdata.isBlank()) return;
-            Path legacy = Path.of(appdata, "PoS Agent");
-            if (!Files.isDirectory(legacy)) return;
-            if (!Files.exists(legacy.resolve("config.xml"))) return;
-            LOG.info("[launcher] Migrating state from " + legacy + " to " + serviceHome);
-            Files.walkFileTree(legacy, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                    Files.createDirectories(serviceHome.resolve(legacy.relativize(dir).toString()));
-                    return FileVisitResult.CONTINUE;
-                }
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    Path target = serviceHome.resolve(legacy.relativize(file).toString());
-                    if (!Files.exists(target)) {
-                        Files.copy(file, target, StandardCopyOption.COPY_ATTRIBUTES);
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        } catch (Exception e) {
-            LOG.log(Level.WARNING, "[launcher] Legacy home migration failed (non-fatal): " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Locate the read-only payload jpackage shipped alongside the EXE.
-     * jpackage layout: ${install}/runtime/ for the JRE, ${install}/app/ for
-     * the contents of --input. So java.home's parent + /app is our seed.
+     * Locate the seed payload shipped alongside launcher.jar. With the
+     * zip-distribution layout, launcher.jar lives at the install root next
+     * to config.xml + quarkus-run.jar. We resolve the jar's parent dir
+     * and use it as the seed if it has the expected files.
      */
     private static Path findSeedDir() {
-        String jpackagePath = System.getProperty("jpackage.app-path");
-        if (jpackagePath != null && !jpackagePath.isBlank()) {
-            Path candidate = Path.of(jpackagePath).toAbsolutePath().getParent();
-            if (candidate != null) {
-                Path appDir = candidate.resolve("app");
-                if (Files.isDirectory(appDir) && Files.exists(appDir.resolve("config.xml"))) {
-                    return appDir;
-                }
+        try {
+            Path self = Path.of(Launcher.class.getProtectionDomain()
+                .getCodeSource().getLocation().toURI()).toAbsolutePath();
+            Path parent = self.getParent();
+            if (parent != null && Files.exists(parent.resolve("config.xml"))
+                && Files.exists(parent.resolve("quarkus-run.jar"))) {
+                return parent;
             }
-        }
-        String javaHome = System.getProperty("java.home");
-        if (javaHome != null) {
-            Path parent = Path.of(javaHome).getParent();
-            if (parent != null) {
-                Path appDir = parent.resolve("app");
-                if (Files.isDirectory(appDir) && Files.exists(appDir.resolve("config.xml"))) {
-                    return appDir;
-                }
-            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "[launcher] Couldn't resolve self path", e);
         }
         Path cwd = Path.of("").toAbsolutePath();
         if (Files.exists(cwd.resolve("config.xml")) && Files.exists(cwd.resolve("quarkus-run.jar"))) {
@@ -489,26 +280,21 @@ public final class Launcher {
             LOG.info("[launcher] No seed directory found — first launch will need network.");
             return;
         }
+        if (seed.equals(appHome)) return;
         LOG.info("[launcher] Seeding " + appHome + " from " + seed);
         Files.walkFileTree(seed, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                Path rel = seed.relativize(dir);
-                Path target = appHome.resolve(rel.toString());
-                Files.createDirectories(target);
+                Files.createDirectories(appHome.resolve(seed.relativize(dir).toString()));
                 return FileVisitResult.CONTINUE;
             }
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                Path rel = seed.relativize(file);
-                String relStr = rel.toString().replace('\\', '/');
-                // Skip launcher.jar — currently running, can't be overwritten.
-                if (relStr.equals("launcher.jar")) {
-                    return FileVisitResult.CONTINUE;
-                }
-                Path target = appHome.resolve(rel.toString());
-                Files.copy(file, target, StandardCopyOption.REPLACE_EXISTING);
+                String rel = seed.relativize(file).toString().replace('\\', '/');
+                // Skip launcher.jar itself — running, can't be overwritten anyway.
+                if (rel.equals("launcher.jar")) return FileVisitResult.CONTINUE;
+                Files.copy(file, appHome.resolve(rel), StandardCopyOption.REPLACE_EXISTING);
                 return FileVisitResult.CONTINUE;
             }
         });
@@ -582,13 +368,7 @@ public final class Launcher {
 
     private static final class LoggingUpdateHandler implements UpdateHandler {
 
-        private final LauncherSplash splash;
         private String currentFile;
-        private long currentSize;
-
-        LoggingUpdateHandler(LauncherSplash splash) {
-            this.splash = splash;
-        }
 
         @Override
         public long version() {
@@ -596,55 +376,19 @@ public final class Launcher {
         }
 
         @Override
-        public void startDownloads() {
-            if (splash != null) {
-                splash.setStatus("Downloading update…");
-                splash.setProgress(0f);
-            }
-        }
-
-        @Override
         public void startDownloadFile(org.update4j.FileMetadata file) {
             this.currentFile = file.getPath().getFileName().toString();
-            this.currentSize = file.getSize();
-            LOG.info(String.format("[launcher] downloading %s (%d bytes)", currentFile, currentSize));
-            if (splash != null) {
-                splash.setDetail(currentFile + " — " + formatBytes(currentSize));
-            }
-        }
-
-        @Override
-        public void updateDownloadProgress(float frac) {
-            if (splash != null) splash.setProgress(frac);
+            LOG.info(String.format("[launcher] downloading %s (%d bytes)", currentFile, file.getSize()));
         }
 
         @Override
         public void doneDownloadFile(org.update4j.FileMetadata file, Path tempFile) {
-            LOG.info(String.format("[launcher] downloaded  %s", currentFile));
-        }
-
-        @Override
-        public void doneDownloads() {
-            if (splash != null) {
-                splash.setStatus("Installing update…");
-                splash.setDetail("Replacing files");
-                splash.setIndeterminate();
-            }
+            LOG.info("[launcher] downloaded  " + currentFile);
         }
 
         @Override
         public void failed(Throwable t) {
             LOG.log(Level.WARNING, "[launcher] update failed: " + t.getMessage(), t);
-            if (splash != null) {
-                splash.setStatus("Update failed");
-                splash.setDetail(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
-            }
-        }
-
-        private static String formatBytes(long n) {
-            if (n < 1024) return n + " B";
-            if (n < 1024 * 1024) return String.format("%.1f KiB", n / 1024.0);
-            return String.format("%.2f MiB", n / 1024.0 / 1024.0);
         }
     }
 }
