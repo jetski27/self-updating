@@ -6,7 +6,7 @@ self-updating desktop application by Azry.
 - **Frontend**: Vite + React + TypeScript, embedded via Quarkus Quinoa
 - **Auto-update**: [update4j](https://github.com/update4j/update4j) — fetches `config.xml` from GitHub Releases, compares SHA-256 hashes, downloads only what changed
 - **Windows installer**: `jpackage` (bundled JRE) — `PoS Agent.exe` runs `launcher.jar` directly, no Launch4j wrapper
-- **Windows service**: wrapped with [WinSW](https://github.com/winsw/winsw) (`PoSAgent.exe` + `PoSAgent.xml`, both shipped in `<install>\app\`). After installing the MSI, run `<install>\app\register-service.bat` **once as Administrator** to register the service with the SCM. After that, `services.msc`, `sc start PoSAgent`, `sc stop PoSAgent`, and Automatic-Delayed boot all work. State (config, logs, restart marker) lives in `%PROGRAMDATA%\PoS Agent\` instead of `%APPDATA%\PoS Agent\` when running as a service. To remove: `<install>\app\unregister-service.bat`.
+- **Windows service**: registered automatically by the MSI via a WiX `<ServiceInstall>` Component pulled into jpackage's `MainFeature`. Wraps the launcher with [WinSW](https://github.com/winsw/winsw) (`PoSAgent.exe` + `PoSAgent.xml` at the install root). After installing, the service is already started — manage it with `services.msc`, `sc start PoSAgent`, `sc stop PoSAgent`. State (config, logs, restart marker) lives in `%PROGRAMDATA%\PoS Agent\` instead of `%APPDATA%\PoS Agent\` when running as a service. Uninstall via Add/Remove Programs stops + removes the service before deleting files.
 
 ## Repository layout
 

@@ -40,15 +40,22 @@ echo "==> Staging update4j payload"
 rm -rf "${INPUT_DIR:?}"/*
 cp -R dist/. "${INPUT_DIR}/"
 
-# 2) Drop WinSW + descriptor + helper scripts alongside the payload.
-#    These live in the install dir permanently and are NOT in config.xml,
-#    so update4j won't try to manage them. They're MSI-installed once.
+# 2) WinSW (renamed PoSAgent.exe) and PoSAgent.xml are NOT staged into the
+#    jpackage input dir. We deliberately keep them out so jpackage's
+#    auto-harvest doesn't put them in its own Files ComponentGroup —
+#    instead our overrides.wxi declares its own Component for them, with
+#    ServiceInstall + ServiceControl, and pulls it into MainFeature via
+#    FeatureRef. ImagePath comes from the Component's KeyPath File.
+#
+#    The override's <File Source="$(env.POSAGENT_WINSW_PATH)"/> reads the
+#    absolute path at candle compile time — that's why we export the env
+#    vars below before invoking jpackage.
 echo "==> Fetching WinSW ${WINSW_VERSION}"
 WINSW_CACHE="installer/cache/winsw-${WINSW_VERSION}.exe"
 if [[ ! -f "${WINSW_CACHE}" ]]; then
   curl -fsSL "${WINSW_URL}" -o "${WINSW_CACHE}"
 fi
-# Verify checksum — fail loudly if upstream binary has changed.
+# Verify checksum so a malicious upstream binary can't slip in.
 if command -v sha256sum >/dev/null 2>&1; then
   ACTUAL_SHA="$(sha256sum "${WINSW_CACHE}" | awk '{print $1}')"
 elif command -v shasum >/dev/null 2>&1; then
@@ -65,20 +72,27 @@ if [[ "${ACTUAL_SHA}" != "${WINSW_SHA256}" ]]; then
   exit 1
 fi
 
-# WinSW convention: <name>.exe and <name>.xml side by side. Renaming the
-# binary to PoSAgent.exe means SCM registers ImagePath as ...\PoSAgent.exe
-# which makes services.msc / sc query output more readable.
-cp "${WINSW_CACHE}"                    "${INPUT_DIR}/PoSAgent.exe"
-cp installer/service/PoSAgent.xml      "${INPUT_DIR}/PoSAgent.xml"
-cp installer/service/register-service.bat   "${INPUT_DIR}/register-service.bat"
-cp installer/service/unregister-service.bat "${INPUT_DIR}/unregister-service.bat"
+# Compute Windows-style absolute paths for candle. On the GitHub Actions
+# Windows runner Git Bash provides cygpath; on macOS/Linux we just pass
+# the Unix path through (jpackage MSI builds don't run there anyway).
+if command -v cygpath >/dev/null 2>&1; then
+  POSAGENT_WINSW_PATH="$(cygpath -w "$(cd "$(dirname "${WINSW_CACHE}")" && pwd)\\$(basename "${WINSW_CACHE}")" 2>/dev/null \
+                         || cygpath -w "${WINSW_CACHE}")"
+  POSAGENT_XML_PATH="$(cygpath -w "${ROOT}/installer/service/PoSAgent.xml")"
+else
+  POSAGENT_WINSW_PATH="${ROOT}/installer/cache/winsw-${WINSW_VERSION}.exe"
+  POSAGENT_XML_PATH="${ROOT}/installer/service/PoSAgent.xml"
+fi
+export POSAGENT_WINSW_PATH POSAGENT_XML_PATH
+echo "    POSAGENT_WINSW_PATH=${POSAGENT_WINSW_PATH}"
+echo "    POSAGENT_XML_PATH=${POSAGENT_XML_PATH}"
 
-# 3) jpackage. --resource-dir is wired up so we can hook WiX in the future,
-#    but jpackage 21 includes overrides.wxi at the <Wix> root level where
-#    only <Fragment> is legal — and Fragments need refs in main.wxs we
-#    can't add. So overrides.wxi stays empty for now, and service
-#    registration is done post-install by running register-service.bat
-#    once as Administrator (shipped in the install dir).
+# 3) jpackage. --resource-dir contains overrides.wxi which Fragment-defines
+#    a service Component (PoSAgent.exe + PoSAgent.xml + ServiceInstall +
+#    ServiceControl) and FeatureRef-pulls it into MainFeature. candle
+#    resolves $(env.POSAGENT_WINSW_PATH) and $(env.POSAGENT_XML_PATH) at
+#    compile time using the env vars we exported above, so the .exe and
+#    .xml don't need to be in --input.
 echo "==> Running jpackage"
 jpackage \
   --verbose \

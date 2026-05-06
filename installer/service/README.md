@@ -8,27 +8,34 @@ PoS Agent registers itself with the Windows Service Control Manager via
 ```
 C:\Program Files\PoS Agent\
 ├── PoS Agent.exe                jpackage's desktop launcher (still works for ad-hoc runs)
-├── app\
-│   ├── launcher.jar             update4j supervisor — entry point in service mode too
-│   ├── PoSAgent.xml             WinSW descriptor (this dir)
-│   ├── PoSAgent.exe             WinSW binary (renamed from winsw.exe, paired with the XML)
-│   └── ...                      seed payload (quarkus-run.jar, lib/, app/)
-└── runtime\bin\java.exe         bundled JRE
+├── PoSAgent.exe                 WinSW binary (renamed from winsw.exe)
+├── PoSAgent.xml                 WinSW descriptor (paired with the .exe)
+├── runtime\
+│   └── bin\java.exe             bundled JRE
+└── app\
+    ├── launcher.jar             update4j supervisor — entry point in service mode too
+    └── ...                      seed payload (quarkus-run.jar, lib/, etc.)
 ```
 
 WinSW's convention: `<name>.exe` and `<name>.xml` must sit side by side. We
 ship `winsw.exe` renamed to `PoSAgent.exe` so SCM ends up registering the
-service with `ImagePath = ...\app\PoSAgent.exe`.
+service with `ImagePath = ...\PoSAgent.exe` and `services.msc` shows it as
+"PoS Agent".
 
 ## What the MSI does
 
-The WiX override at `installer/wix/main.wxs` adds a `<ServiceInstall>` and
-`<ServiceControl>` element on the WinSW exe. On install:
+The WiX override at `installer/wix/overrides.wxi` declares a `<Component>`
+containing `<File>` elements for `PoSAgent.exe` and `PoSAgent.xml`, plus
+`<ServiceInstall>` and `<ServiceControl>` to register/start/stop/remove
+the service. The Component is hooked into jpackage's `MainFeature` via
+`<FeatureRef>` so the linker pulls it into the MSI.
+
+On install (run as Administrator — the MSI itself prompts for elevation):
 
 1. Files are placed in `C:\Program Files\PoS Agent\`.
-2. `ServiceInstall` registers a service named `PoSAgent` with the SCM, account
-   `LocalSystem`, start type Automatic (Delayed).
-3. `ServiceControl` starts the service immediately.
+2. `ServiceInstall` registers a service named `PoSAgent` with the SCM,
+   account `LocalSystem`, start type Automatic.
+3. `ServiceControl` starts the service immediately. SCM owns it from then on.
 
 On uninstall:
 
@@ -65,7 +72,7 @@ re-runs update4j, boots the new fast-jar.
 ## Manual installation (for development / debugging)
 
 ```powershell
-# As Administrator, in C:\Program Files\PoS Agent\app\
+# As Administrator, in C:\Program Files\PoS Agent\
 .\PoSAgent.exe install
 .\PoSAgent.exe start
 
