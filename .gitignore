@@ -55,3 +55,4 @@ bin/
 installer/cache/
 installer/jpackage-input/
 installer/output/
+installer/jpackage-temp/

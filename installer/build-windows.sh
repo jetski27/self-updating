@@ -93,9 +93,18 @@ echo "    POSAGENT_XML_PATH=${POSAGENT_XML_PATH}"
 #    resolves $(env.POSAGENT_WINSW_PATH) and $(env.POSAGENT_XML_PATH) at
 #    compile time using the env vars we exported above, so the .exe and
 #    .xml don't need to be in --input.
+# Use a known temp dir so we can inspect generated WiX after the run.
+# jpackage normally cleans this up; --temp keeps it.
+JPKG_TEMP="installer/jpackage-temp"
+rm -rf "${JPKG_TEMP}"
+mkdir -p "${JPKG_TEMP}"
+
+# Capture jpackage's exit so we can dump main.wxs even on failure.
 echo "==> Running jpackage"
+JPKG_FAIL=0
 jpackage \
   --verbose \
+  --temp "${JPKG_TEMP}" \
   --type exe \
   --name "PoS Agent" \
   --app-version "${VERSION}" \
@@ -114,7 +123,22 @@ jpackage \
   --win-upgrade-uuid "8B2E9C4F-3D7A-4F1B-9A6E-5C3D2E1F4A0B" \
   --icon installer/app.ico \
   --runtime-image "${JAVA_HOME_DIR}" \
-  --dest installer/output/
+  --dest installer/output/ \
+  || JPKG_FAIL=$?
+
+# Dump the generated main.wxs so we can see its actual structure for
+# building our own override. Print whether the run succeeded or failed.
+echo "==> Generated WiX files (for reference / debugging):"
+find "${JPKG_TEMP}" -name '*.wxs' -o -name '*.wxi' -o -name '*.wxf' 2>/dev/null | while read f; do
+  echo "::group::${f}"
+  cat "${f}" || true
+  echo "::endgroup::"
+done
+
+if [[ "${JPKG_FAIL}" -ne 0 ]]; then
+  echo "==> jpackage failed with ${JPKG_FAIL}"
+  exit "${JPKG_FAIL}"
+fi
 
 echo "==> Done. Installers at installer/output/"
 ls -la installer/output/
