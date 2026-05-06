@@ -1,83 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    jpackage WiX overrides for PoS Agent.
-
-    jpackage 21's main.wxs does <?include $(sys.JPACKAGE_RESOURCEDIR)\overrides.wxi ?>
-    inside the <Product> element. So this file MUST:
-      - Have <Include> as its root.
-      - Contain only elements valid inside <Product> (no <Fragment>, no <Wix>).
-
-    We deliberately avoid declaring our own <Component>/<Feature> here, because
-    that would require knowing jpackage's auto-generated ComponentGroup id
-    (which drifts across JDK versions). Instead we register the Windows
-    service via deferred custom actions that shell out to the bundled WinSW
-    binary (PoSAgent.exe). WinSW install/start/stop/uninstall verbs are
-    stable, and the install path is known: jpackage drops the contents of
-    its input directory under [APPLICATIONFOLDER]app\.
-
-    Lifecycle:
-      Fresh install      InstallFiles, install, start
-      Upgrade            RemoveExistingProducts handles cleanup, then
-                         InstallFiles, install, start (install is idempotent;
-                         WinSW exits non-zero if the service already exists,
-                         hence Return="ignore")
-      Uninstall          stop, uninstall, RemoveFiles
+    Bisect probe: bare Include to confirm jpackage 21's main.wxs actually
+    <?include?>s this file at a valid Product-context point. Once we see a
+    green build with this empty file, we add Custom Actions back one by one
+    and watch which one breaks candle.
 -->
 <Include>
-
-    <!--
-        Per Windows Installer rules, deferred custom actions run with the
-        SYSTEM token (Impersonate="no") and so have the privilege to call
-        OpenSCManager / CreateService. Return="check" on the install action
-        means a non-zero exit aborts the install — but we use Return="ignore"
-        because winsw v2 returns non-zero on "service already exists", which
-        is a benign condition during repair / upgrade reinstalls.
-    -->
-    <CustomAction Id="PoSAgent_ServiceInstall"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" install'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <CustomAction Id="PoSAgent_ServiceStart"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" start'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <CustomAction Id="PoSAgent_ServiceStop"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" stop'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <CustomAction Id="PoSAgent_ServiceUninstall"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" uninstall'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <InstallExecuteSequence>
-        <!--
-            Install side: register and start the service after all files are
-            on disk. The "NOT Installed" condition keeps these from re-running
-            during a Modify or Repair without an actual reinstall.
-        -->
-        <Custom Action="PoSAgent_ServiceInstall" After="InstallFiles">NOT Installed</Custom>
-        <Custom Action="PoSAgent_ServiceStart" After="PoSAgent_ServiceInstall">NOT Installed</Custom>
-
-        <!--
-            Uninstall side: stop the service and unregister it BEFORE the
-            files (including PoSAgent.exe itself) are removed from disk.
-            The REMOVE="ALL" condition is true only on full uninstall, not on
-            upgrades (where RemoveExistingProducts handles things differently).
-        -->
-        <Custom Action="PoSAgent_ServiceStop" Before="RemoveFiles">REMOVE="ALL"</Custom>
-        <Custom Action="PoSAgent_ServiceUninstall" After="PoSAgent_ServiceStop">REMOVE="ALL"</Custom>
-    </InstallExecuteSequence>
-
 </Include>

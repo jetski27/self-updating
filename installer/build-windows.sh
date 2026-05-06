@@ -78,6 +78,7 @@ cp installer/service/unregister-service.bat "${INPUT_DIR}/unregister-service.bat
 #    elements. jpackage's main.wxs <?include?>s overrides.wxi automatically.
 echo "==> Running jpackage"
 jpackage \
+  --verbose \
   --type exe \
   --name "PoS Agent" \
   --app-version "${VERSION}" \
