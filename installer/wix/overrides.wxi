@@ -85,14 +85,17 @@
 
             </Component>
         </DirectoryRef>
-    </Fragment>
 
-    <!-- Hook our service Component into jpackage's main Feature so MSI
-         actually installs it. If a future JDK changes the feature id,
-         candle will fail with a clear "feature not found" error and this
-         is the line to update. -->
-    <FeatureRef Id="MainFeature">
-        <ComponentRef Id="PoSAgentService"/>
-    </FeatureRef>
+        <!-- Hook our service Component into jpackage's main Feature so MSI
+             actually installs it. FeatureRef is valid inside <Fragment>
+             and <Product>, but NOT directly inside <Wix> — that's why this
+             lives within the Fragment. If a future JDK changes the feature
+             id, candle fails with a clear "feature not found" error and
+             this is the line to update. -->
+        <FeatureRef Id="MainFeature">
+            <ComponentRef Id="PoSAgentService"/>
+        </FeatureRef>
+
+    </Fragment>
 
 </Include>
