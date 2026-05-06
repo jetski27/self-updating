@@ -107,7 +107,8 @@
 
         INSTALLDIR is jpackage 21's id for the install directory. The
         File@Source paths come from env vars resolved at candle compile
-        time so the actual files don't need to be inside --input.
+        time so the actual files don't need to be inside the jpackage
+        input directory.
     -->
     <DirectoryRef Id="INSTALLDIR">
       <Component Id="PoSAgentService"
