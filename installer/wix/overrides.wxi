@@ -1,68 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    jpackage WiX overrides for PoS Agent — Windows service registration.
+    jpackage 21 <?include?>s this file at the <Wix> root level (not inside
+    <Product>), so the only legal children would be <Fragment>. But a
+    Fragment is only linked when something in main.wxs references it
+    (ComponentGroupRef, FeatureRef, etc.), and jpackage's main.wxs
+    references nothing we can hook into without overriding main.wxs in
+    full. So we leave this empty and register the service post-install via
+    register-service.bat (shipped in the install directory, run once as
+    Administrator). See installer/service/README.md.
 
-    jpackage 21's main.wxs <?include?>s this file inside <Product>. We
-    register the service via deferred Custom Actions that shell out to the
-    bundled WinSW binary (PoSAgent.exe). WinSW's install/start/stop/
-    uninstall verbs are stable; the install path is known: jpackage drops
-    the contents of its input directory under [APPLICATIONFOLDER]app\.
-
-    Lifecycle:
-      Fresh install      InstallFiles, then install + start
-      Upgrade            RemoveExistingProducts cleans up first; then
-                         InstallFiles, install (idempotent — Return ignore),
-                         start
-      Uninstall          stop + uninstall before RemoveFiles
+    Kept around so the WiX hook stays wired up — we'll revisit if jpackage
+    adds a service-install resource override in a future JDK.
 -->
 <Include>
-
-    <!--
-        Deferred custom actions run with the SYSTEM token (Impersonate=no)
-        so they have the privilege to call OpenSCManager / CreateService.
-        Return=ignore on every action because WinSW v2 returns non-zero
-        for benign conditions (already-installed, already-stopped, etc.)
-        which we don't want to abort the MSI over.
-    -->
-    <CustomAction Id="PoSAgent_ServiceInstall"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" install'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <CustomAction Id="PoSAgent_ServiceStart"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" start'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <CustomAction Id="PoSAgent_ServiceStop"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" stop'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <CustomAction Id="PoSAgent_ServiceUninstall"
-                  Directory="APPLICATIONFOLDER"
-                  ExeCommand='"[APPLICATIONFOLDER]app\PoSAgent.exe" uninstall'
-                  Execute="deferred"
-                  Impersonate="no"
-                  Return="ignore"/>
-
-    <!--
-        WiX 3 allows multiple <InstallExecuteSequence> children of <Product>
-        and merges them at link time, so adding our scheduling here doesn't
-        clash with the one jpackage's main.wxs declares for upgrade
-        management.
-    -->
-    <InstallExecuteSequence>
-        <Custom Action="PoSAgent_ServiceInstall" After="InstallFiles">NOT Installed</Custom>
-        <Custom Action="PoSAgent_ServiceStart" After="PoSAgent_ServiceInstall">NOT Installed</Custom>
-        <Custom Action="PoSAgent_ServiceStop" Before="RemoveFiles">REMOVE="ALL"</Custom>
-        <Custom Action="PoSAgent_ServiceUninstall" After="PoSAgent_ServiceStop">REMOVE="ALL"</Custom>
-    </InstallExecuteSequence>
-
 </Include>

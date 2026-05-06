@@ -73,9 +73,12 @@ cp installer/service/PoSAgent.xml      "${INPUT_DIR}/PoSAgent.xml"
 cp installer/service/register-service.bat   "${INPUT_DIR}/register-service.bat"
 cp installer/service/unregister-service.bat "${INPUT_DIR}/unregister-service.bat"
 
-# 3) jpackage. --resource-dir points at our WiX overrides directory, which
-#    contains overrides.wxi adding the ServiceInstall / ServiceControl
-#    elements. jpackage's main.wxs <?include?>s overrides.wxi automatically.
+# 3) jpackage. --resource-dir is wired up so we can hook WiX in the future,
+#    but jpackage 21 includes overrides.wxi at the <Wix> root level where
+#    only <Fragment> is legal — and Fragments need refs in main.wxs we
+#    can't add. So overrides.wxi stays empty for now, and service
+#    registration is done post-install by running register-service.bat
+#    once as Administrator (shipped in the install dir).
 echo "==> Running jpackage"
 jpackage \
   --verbose \

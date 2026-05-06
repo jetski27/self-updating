@@ -6,7 +6,7 @@ self-updating desktop application by Azry.
 - **Frontend**: Vite + React + TypeScript, embedded via Quarkus Quinoa
 - **Auto-update**: [update4j](https://github.com/update4j/update4j) — fetches `config.xml` from GitHub Releases, compares SHA-256 hashes, downloads only what changed
 - **Windows installer**: `jpackage` (bundled JRE) — `PoS Agent.exe` runs `launcher.jar` directly, no Launch4j wrapper
-- **Windows service**: registered automatically via the MSI's WiX `ServiceInstall`. Wrapped with [WinSW](https://github.com/winsw/winsw) so the launcher process is owned by the SCM. Manage with `services.msc`, `sc start "PoSAgent"`, `sc stop "PoSAgent"`. State (config, logs, restart marker) lives in `%PROGRAMDATA%\PoS Agent\` instead of `%APPDATA%\PoS Agent\` when running as a service.
+- **Windows service**: wrapped with [WinSW](https://github.com/winsw/winsw) (`PoSAgent.exe` + `PoSAgent.xml`, both shipped in `<install>\app\`). After installing the MSI, run `<install>\app\register-service.bat` **once as Administrator** to register the service with the SCM. After that, `services.msc`, `sc start PoSAgent`, `sc stop PoSAgent`, and Automatic-Delayed boot all work. State (config, logs, restart marker) lives in `%PROGRAMDATA%\PoS Agent\` instead of `%APPDATA%\PoS Agent\` when running as a service. To remove: `<install>\app\unregister-service.bat`.
 
 ## Repository layout
 
