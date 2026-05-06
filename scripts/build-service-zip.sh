@@ -140,12 +140,31 @@ State location
     .restart-pending            transient — restart marker
 EOF
 
-# Pack it. -y preserves perms; -q quiet.
+# Pack it. The Windows GitHub Actions runner ships 7z but not zip;
+# bash on Mac/Linux usually has zip. Prefer zip for the friendlier
+# CLI; fall back to 7z; last-resort PowerShell's Compress-Archive
+# (also Windows-only). All produce the same .zip format.
 ZIP="installer/output/posagent-service-${VERSION}.zip"
 rm -f "${ZIP}"
-( cd installer/output && zip -r -q "$(basename "${ZIP}")" "$(basename "${STAGE}")" )
+ZIP_BASENAME="$(basename "${ZIP}")"
+STAGE_BASENAME="$(basename "${STAGE}")"
+if command -v zip >/dev/null 2>&1; then
+  ( cd installer/output && zip -r -q "${ZIP_BASENAME}" "${STAGE_BASENAME}" )
+elif command -v 7z >/dev/null 2>&1; then
+  ( cd installer/output && 7z a -tzip -bd -bb0 "${ZIP_BASENAME}" "${STAGE_BASENAME}" >/dev/null )
+elif command -v powershell.exe >/dev/null 2>&1; then
+  powershell.exe -NoProfile -Command \
+    "Compress-Archive -Path '${STAGE}' -DestinationPath '${ZIP}' -Force"
+else
+  echo "error: no zip/7z/powershell available to pack the archive" >&2
+  exit 1
+fi
 
-# Sanity: print what we shipped.
+# Sanity: print what we shipped. Use whichever lister we have.
 echo "==> Built ${ZIP}"
-unzip -l "${ZIP}" | tail -15
+if command -v unzip >/dev/null 2>&1; then
+  unzip -l "${ZIP}" | tail -15
+elif command -v 7z >/dev/null 2>&1; then
+  7z l "${ZIP}" | tail -15
+fi
 ls -la "${ZIP}"
