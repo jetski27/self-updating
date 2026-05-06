@@ -52,3 +52,6 @@ bin/
 
 ### Logs ###
 *.log
+installer/cache/
+installer/jpackage-input/
+installer/output/

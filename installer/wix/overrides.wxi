@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    jpackage WiX overrides for PoS Agent.
+
+    jpackage's main.wxs (JDK 21) does <?include overrides.wxi ?> at the bottom
+    of the Product element, after all Directory/Component/Feature definitions
+    are in scope. We use that hook to:
+
+      1. Register the WinSW wrapper (PoSAgent.exe + PoSAgent.xml) as a Windows
+         service via <ServiceInstall>. SCM end-state: a service named
+         "PoSAgent" with display name "PoS Agent", LocalSystem account, start
+         type Automatic (Delayed).
+      2. Start it immediately after install and stop it before uninstall, via
+         <ServiceControl>.
+      3. Bind the new component to the main install Feature so MSI counts it
+         when computing what's installed.
+
+    The PoSAgentServiceComponent references PoSAgent.exe by relative path under
+    the installer's APPDIR — this matches how jpackage's "Files" component
+    discovers the contents of --input. If jpackage renames its main install
+    directory ID across JDK versions, update INSTALLDIR_REF below.
+-->
+
+<!-- jpackage 21 typically names the per-app install dir "INSTALLDIR".
+     If a future JDK changes this, dump the generated MSI with `dark.exe`
+     and look for the <Directory Id="..."> closest to the app files. -->
+<?define INSTALLDIR_REF = "INSTALLDIR" ?>
+<?define APPDIR_REF = "APPDIR" ?>
+
+<Fragment>
+    <DirectoryRef Id="$(var.APPDIR_REF)">
+        <Component Id="PoSAgentServiceComponent"
+                   Guid="A8E3D5C1-4F62-4D9B-9F1E-6C7B2A0E5D11"
+                   Win64="yes">
+            <!--
+              KeyPath: the WinSW exe itself. The actual file is staged into
+              APPDIR by jpackage's auto-generated "Files" component (since
+              winsw lives under dist/, which is the --input directory). We
+              create no <File> here; instead we hang the service registration
+              off the file that's already there. This avoids "duplicate file"
+              ICE errors during light.exe linking.
+
+              The trick is to make THIS component own a registry KeyPath so
+              it can install/uninstall independently of the file-owning
+              component while still being able to reference the file path
+              for ServiceInstall.
+            -->
+            <RegistryKey Root="HKLM"
+                         Key="Software\Azry\PoS Agent\Service">
+                <RegistryValue Type="string"
+                               Name="Installed"
+                               Value="1"
+                               KeyPath="yes"/>
+            </RegistryKey>
+
+            <!-- Register the service. Name = service id used by sc.exe and
+                 services.msc. ImagePath is constructed by Windows from the
+                 service's Component install location at runtime. -->
+            <ServiceInstall Id="PoSAgentServiceInstall"
+                            Name="PoSAgent"
+                            DisplayName="PoS Agent"
+                            Description="PoS Agent — self-updating desktop application by Azry. Polls GitHub Releases hourly and applies updates on restart."
+                            Type="ownProcess"
+                            Start="auto"
+                            Account="LocalSystem"
+                            ErrorControl="normal"
+                            Vital="yes"
+                            Interactive="no">
+                <!-- Wait for TCP/IP before starting; the launcher's first
+                     action is a GitHub API call. -->
+                <ServiceDependency Id="Tcpip"/>
+            </ServiceInstall>
+
+            <!-- Start on install, stop+remove on uninstall. -->
+            <ServiceControl Id="PoSAgentServiceControl"
+                            Name="PoSAgent"
+                            Start="install"
+                            Stop="both"
+                            Remove="uninstall"
+                            Wait="yes"/>
+        </Component>
+    </DirectoryRef>
+</Fragment>
+
+<!-- Hook the service component into the main feature so MSI installs it.
+     "MainFeature" is jpackage's default feature id; if a future JDK changes
+     this, update FEATURE_REF below. -->
+<?define FEATURE_REF = "MainFeature" ?>
+<FeatureRef Id="$(var.FEATURE_REF)">
+    <ComponentRef Id="PoSAgentServiceComponent"/>
+</FeatureRef>

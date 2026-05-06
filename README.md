@@ -6,6 +6,7 @@ self-updating desktop application by Azry.
 - **Frontend**: Vite + React + TypeScript, embedded via Quarkus Quinoa
 - **Auto-update**: [update4j](https://github.com/update4j/update4j) — fetches `config.xml` from GitHub Releases, compares SHA-256 hashes, downloads only what changed
 - **Windows installer**: `jpackage` (bundled JRE) — `PoS Agent.exe` runs `launcher.jar` directly, no Launch4j wrapper
+- **Windows service**: registered automatically via the MSI's WiX `ServiceInstall`. Wrapped with [WinSW](https://github.com/winsw/winsw) so the launcher process is owned by the SCM. Manage with `services.msc`, `sc start "PoSAgent"`, `sc stop "PoSAgent"`. State (config, logs, restart marker) lives in `%PROGRAMDATA%\PoS Agent\` instead of `%APPDATA%\PoS Agent\` when running as a service.
 
 ## Repository layout
 
@@ -17,6 +18,8 @@ self-updating desktop application by Azry.
 │   ├── frontend/               Vite + React source
 │   └── src/main/java/...       REST resources, scheduler, event bus
 ├── installer/                  jpackage configuration
+│   ├── service/                WinSW descriptor + register/unregister .bat helpers
+│   └── wix/overrides.wxi       jpackage WiX <ServiceInstall> override
 ├── scripts/                    build-release.sh, verify-release.sh, generate-config.py
 └── .github/workflows/          release.yml — GitHub Actions release pipeline
 ```
