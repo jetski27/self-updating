@@ -52,11 +52,9 @@ jobs:
         shell: bash
         run: scripts/build-release.sh "${{ steps.ver.outputs.version }}"
 
-      - name: Build Windows installer
+      - name: Build service zip
         shell: bash
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: installer/build-windows.sh
+        run: scripts/build-service-zip.sh "${{ steps.ver.outputs.version }}"
 
       - name: Verify release
         shell: bash
@@ -66,9 +64,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          # The dist/* entries are the update4j-managed payload referenced by
-          # config.xml. installer/output/* is the MSI/EXE installer that
-          # registers the Windows service via the WiX overrides.
+          # dist/* are the update4j-managed payload entries referenced by
+          # config.xml — used for delta updates after first install.
+          # installer/output/posagent-service-*.zip is the bootstrap
+          # distribution: extract on a Windows box with Java 21+, run
+          # install-service.bat as admin, done.
           files: |
             dist/config.xml
             dist/quarkus-run.jar
@@ -77,4 +77,4 @@ jobs:
             dist/app/**
             dist/lib/**
             dist/quarkus/**
-            installer/output/PoS Agent-*.exe
+            installer/output/posagent-service-*.zip

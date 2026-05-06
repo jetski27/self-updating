@@ -1,71 +1,73 @@
 <!--
   WinSW (Windows Service Wrapper) descriptor for PoS Agent.
 
-  Lifecycle:
-    1. SCM starts the service. WinSW spawns the bundled JRE pointed at
-       launcher.jar with --service. The launcher uses %ProgramData%\PoS Agent
-       for state (config.xml, .restart-pending marker, logs) instead of the
-       per-user %APPDATA% it uses in desktop mode.
-    2. The launcher's supervisor loop owns Quarkus restarts (update4j check,
-       child JVM, .restart-pending handling). WinSW only sees one long-running
-       process and never has to interpret application semantics.
-    3. SCM stop -> WinSW signals the launcher -> service-mode shutdown hook
-       flips STOPPING, destroys the Quarkus child, and the supervisor loop
-       returns cleanly. Exit code 0 = service stopped, no restart.
+  Distribution model: a plain zip the user extracts somewhere (e.g.
+  C:\posagent\) and registers as a service via install-service.bat. No
+  jpackage / MSI / bundled JRE — the client is expected to have Java 21+
+  installed and JAVA_HOME set system-wide.
 
-  Path placeholders are substituted by WinSW at runtime:
-    %BASE%   = directory containing this XML and PoSAgent.exe (the install
-               root, i.e. C:\Program Files\PoS Agent\). The MSI's WiX
-               Component installs both files directly to APPLICATIONFOLDER,
-               siblings of \runtime\ and \app\.
+  Lifecycle:
+    1. SCM starts the service. WinSW invokes %JAVA_HOME%\bin\java.exe
+       against launcher.jar (which sits next to PoSAgent.exe). The
+       launcher's --service flag picks %ProgramData%\PoS Agent\ for
+       state and skips the splash + browser-open.
+    2. The launcher's supervisor loop owns Quarkus restarts: update4j
+       checks GitHub Releases, downloads only changed files, then boots
+       the Quarkus child JVM. .restart-pending marker drives
+       in-process restarts; SCM only sees one long-running process.
+    3. SCM stop -> service-mode shutdown hook drains the Quarkus child
+       and exits the supervisor cleanly. Exit code 0 = service stopped,
+       no automatic restart.
+
+  Path placeholders WinSW substitutes at runtime:
+    %BASE%        directory containing this XML and PoSAgent.exe
+    %JAVA_HOME%   from the system environment (must be set machine-wide
+                  so LocalSystem inherits it; user-only JAVA_HOME won't
+                  reach the service)
 -->
 <service>
     <id>PoSAgent</id>
     <name>PoS Agent</name>
     <description>PoS Agent — self-updating desktop application by Azry. Polls GitHub Releases hourly and applies updates on restart.</description>
 
-    <executable>%BASE%\runtime\bin\java.exe</executable>
-    <arguments>-jar "%BASE%\app\launcher.jar" --service</arguments>
-    <workingdirectory>%BASE%\app</workingdirectory>
+    <executable>%JAVA_HOME%\bin\java.exe</executable>
+    <arguments>-jar "%BASE%\launcher.jar" --service</arguments>
+    <workingdirectory>%BASE%</workingdirectory>
 
-    <!-- Service starts at boot but after the network stack is up. Delayed
-         auto-start keeps system boot snappy and avoids racing the network
-         layer that the GitHub poll depends on. -->
+    <!-- Service starts at boot but after the network stack is up. The
+         launcher's first action is a GitHub API call. -->
     <startmode>Automatic</startmode>
     <delayedAutoStart>true</delayedAutoStart>
     <depend>Tcpip</depend>
 
-    <!-- Run as LocalSystem. Migrate to a dedicated service account later if
-         you need defense-in-depth; nothing in the design requires elevation. -->
+    <!-- LocalSystem because it inherits machine-wide JAVA_HOME and has
+         the privilege to read/write %ProgramData%. Switch to a
+         dedicated service account if you need defense-in-depth. -->
     <serviceaccount>
         <username>LocalSystem</username>
         <allowservicelogon>true</allowservicelogon>
     </serviceaccount>
 
-    <!-- Logging: WinSW captures the launcher process's stdout/stderr. The
-         launcher additionally writes structured logs via java.util.logging
-         to %ProgramData%\PoS Agent\logs\launcher.log; Quarkus writes its own
-         to %ProgramData%\PoS Agent\logs\posagent.log. So this is just the
-         raw process trail. -->
+    <!-- WinSW captures launcher stdout/stderr here. The launcher itself
+         additionally rolls its own log into %ProgramData%\PoS Agent\logs\
+         via java.util.logging, and Quarkus rolls posagent.log there too. -->
     <logpath>%ProgramData%\PoS Agent\logs</logpath>
     <log mode="roll-by-size">
         <sizeThreshold>5120</sizeThreshold>
         <keepFiles>3</keepFiles>
     </log>
 
-    <!-- Recovery: if the launcher process itself dies (which means the
-         in-process supervisor loop also died), back off and let SCM restart
-         it. Reset failure count after an hour of stable uptime. -->
+    <!-- If the launcher process itself dies (its in-process supervisor
+         loop died too), back off and let SCM restart it. Reset failure
+         count after an hour of stable uptime. -->
     <onfailure action="restart" delay="5 sec"/>
     <onfailure action="restart" delay="30 sec"/>
     <onfailure action="restart" delay="60 sec"/>
     <resetfailure>1 hour</resetfailure>
 
-    <!-- Stop timeout: give the launcher 30 s to drain — destroying the
-         Quarkus child and joining waitFor() should take well under that. -->
+    <!-- 30 s for the launcher to drain — destroying the Quarkus child
+         and joining waitFor() should take well under that. -->
     <stoptimeout>30 sec</stoptimeout>
 
-    <!-- Don't restart on clean exit (exit code 0) — that's how a service
-         stop is supposed to work. -->
     <stopparentprocessfirst>true</stopparentprocessfirst>
 </service>

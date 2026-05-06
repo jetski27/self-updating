@@ -1,51 +1,62 @@
 # Service installation
 
-PoS Agent registers itself with the Windows Service Control Manager via
-**WinSW** (Windows Service Wrapper) wrapped around the existing `launcher.jar`.
+PoS Agent ships as a plain zip (`posagent-service-vX.Y.Z.zip`) that the
+client extracts and registers as a Windows service via **WinSW** (Windows
+Service Wrapper) wrapped around the existing `launcher.jar`. No installer,
+no bundled JRE — the client supplies Java 21+.
 
-## Layout after install
+## Layout after extracting the zip
 
 ```
-C:\Program Files\PoS Agent\
-├── PoS Agent.exe                jpackage's desktop launcher (still works for ad-hoc runs)
-├── PoSAgent.exe                 WinSW binary (renamed from winsw.exe)
-├── PoSAgent.xml                 WinSW descriptor (paired with the .exe)
-├── runtime\
-│   └── bin\java.exe             bundled JRE
-└── app\
-    ├── launcher.jar             update4j supervisor — entry point in service mode too
-    └── ...                      seed payload (quarkus-run.jar, lib/, etc.)
+C:\posagent\                              (or wherever the user extracted)
+├── PoSAgent.exe                          WinSW binary (renamed from winsw.exe)
+├── PoSAgent.xml                          WinSW descriptor (paired with the .exe)
+├── install-service.bat                   register + start the service (run as admin)
+├── uninstall-service.bat                 stop + remove the service
+├── README.txt                            quick instructions
+├── launcher.jar                          update4j supervisor (service entry point)
+├── config.xml                            update4j manifest (delta-updated later)
+├── quarkus-run.jar                       Quarkus fast-jar
+├── app/                                  Quarkus app classes + frontend bundle
+├── lib/                                  Quarkus dependencies
+└── quarkus/                              Quarkus internals
 ```
 
 WinSW's convention: `<name>.exe` and `<name>.xml` must sit side by side. We
-ship `winsw.exe` renamed to `PoSAgent.exe` so SCM ends up registering the
-service with `ImagePath = ...\PoSAgent.exe` and `services.msc` shows it as
-"PoS Agent".
+ship `winsw.exe` renamed to `PoSAgent.exe` so SCM registers the service with
+`ImagePath = ...\PoSAgent.exe` and `services.msc` shows it as "PoS Agent".
 
-## What the MSI does
+## What install-service.bat does
 
-The WiX override at `installer/wix/overrides.wxi` declares a `<Component>`
-containing `<File>` elements for `PoSAgent.exe` and `PoSAgent.xml`, plus
-`<ServiceInstall>` and `<ServiceControl>` to register/start/stop/remove
-the service. The Component is hooked into jpackage's `MainFeature` via
-`<FeatureRef>` so the linker pulls it into the MSI.
+1. Verifies it was launched with admin privileges (`net session`).
+2. Verifies system-wide `JAVA_HOME` is set and points at a real JDK
+   (the service runs as LocalSystem and only sees machine-wide env vars
+   — a user-only `JAVA_HOME` won't reach it).
+3. If the service already exists from a prior install, stops + removes
+   it cleanly so the re-register starts from a known state.
+4. `PoSAgent.exe install` registers the service with the SCM
+   (LocalSystem, Automatic-Delayed, depends on Tcpip).
+5. `PoSAgent.exe start` starts the service immediately.
 
-On install (run as Administrator — the MSI itself prompts for elevation):
+After that, SCM owns the lifecycle. `launcher.jar`'s in-process
+supervisor handles update4j checks, dashboard restart-pending, etc.,
+without involving the SCM.
 
-1. Files are placed in `C:\Program Files\PoS Agent\`.
-2. `ServiceInstall` registers a service named `PoSAgent` with the SCM,
-   account `LocalSystem`, start type Automatic.
-3. `ServiceControl` starts the service immediately. SCM owns it from then on.
+## State
 
-On uninstall:
+`%ProgramData%\PoS Agent\` (machine-wide, since the service runs as
+LocalSystem):
 
-1. `ServiceControl` stops the service, then deletes the registration.
-2. Files are removed.
+- `config.xml` — the manifest update4j cached
+- `quarkus-run.jar`, `app/`, `lib/` — delta-updated payload
+- `logs/launcher.log` — supervisor log
+- `logs/posagent.log` — Quarkus log
+- `logs/winsw.<svc>.log` — WinSW process log
+- `.restart-pending` — transient, drives in-process restarts
 
-The `%ProgramData%\PoS Agent\` state directory is intentionally **not**
-removed by the MSI — that keeps cached configs, logs and the .restart-pending
-marker (if any) across upgrades. Use `Remove-Item -Recurse` manually if you
-want a hard reset.
+`uninstall-service.bat` only removes the service registration; it leaves
+`%ProgramData%\PoS Agent\` intact so the next install reuses the cached
+payload. Delete the directory manually for a hard reset.
 
 ## Service mode behavior
 
@@ -72,7 +83,7 @@ re-runs update4j, boots the new fast-jar.
 ## Manual installation (for development / debugging)
 
 ```powershell
-# As Administrator, in C:\Program Files\PoS Agent\
+# As Administrator, in the extracted zip directory:
 .\PoSAgent.exe install
 .\PoSAgent.exe start
 
@@ -81,5 +92,6 @@ re-runs update4j, boots the new fast-jar.
 .\PoSAgent.exe uninstall
 ```
 
-These are useful when iterating on the WinSW XML without rebuilding the
-whole MSI.
+These do exactly what install-service.bat / uninstall-service.bat do,
+just without the env-var sanity checks. Handy when iterating on the
+WinSW XML.
